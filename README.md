@@ -1,10 +1,10 @@
 # Simple eBook Merger
 
-Merge a bunch of eBook files into one EPUB. That's it.
+Merge a bunch of eBook files into one output file. Supports 11 input formats and 5 output formats. That's it.
 
 I wrote this because I was sick of dealing with 20+ individual chapter files on my eReader every time an author publishes a series in parts. Now I just dump them all in a folder and run this.
 
-Supports **EPUB**, **TXT**, and **HTML** inputs. Output is always a single, clean EPUB.
+Supports **EPUB**, **TXT**, **HTML**, **PDF**, **DOCX**, **RTF**, **Markdown**, **FB2**, **ODT**, and **CBZ** inputs. Output as **EPUB**, **TXT**, **HTML**, **PDF**, or **DOCX**.
 
 ================================================================================
 
@@ -17,7 +17,7 @@ Supports **EPUB**, **TXT**, and **HTML** inputs. Output is always a single, clea
 Install the Python dependencies (one time):
 
 ```
-pip install ebooklib beautifulsoup4 lxml
+pip install ebooklib beautifulsoup4 lxml pypdf python-docx striprtf markdown odfpy fpdf2 Pillow
 ```
 
 ================================================================================
@@ -32,9 +32,9 @@ Double-click `ebook_merger.py` or run:
 python ebook_merger.py
 ```
 
-A window opens. Pick your input folder, set a title/author, hit **Merge**. Done.
+A window opens. Pick your input folder, choose your output format, set a title/author, hit **Merge**. Done.
 
-The GUI shows you which files it found, a live log as it processes, and a summary when it's finished.
+The GUI shows you which files it found, a live log as it processes, and a summary when it's finished. There's a dropdown to pick your output format (EPUB, TXT, HTML, PDF, DOCX) — changing it auto-updates the file extension.
 
 ### Option B — Terminal / headless
 
@@ -47,26 +47,60 @@ python ebook_merger.py --nogui
 In this mode you'll need to edit the `CONFIG` section near the top of the script first:
 
 ```python
-INPUT_DIR    = r"C:\Users\You\Documents\my_series"
-OUTPUT_FILE  = "merged_book.epub"
-BOOK_TITLE   = "My Merged eBook"
-BOOK_AUTHOR  = "Various Authors"
-ADD_DIVIDERS = True
+INPUT_DIR     = r"C:\Users\You\Documents\my_series"
+OUTPUT_FILE   = "merged_book.epub"
+BOOK_TITLE    = "My Merged eBook"
+BOOK_AUTHOR   = "Various Authors"
+ADD_DIVIDERS  = True
+OUTPUT_FORMAT = "epub"
 ```
 
 Then just run it.
 
 ================================================================================
 
-## Supported Formats
+## Supported Input Formats
 
 | Format | Extension | What happens |
 |---|---|---|
 | EPUB | .epub | Chapters, formatting, and images are all preserved |
 | Plain Text | .txt | Turned into a single chapter with paragraph formatting |
 | HTML | .html, .htm | Turned into a chapter, formatting preserved |
+| PDF | .pdf | Text extracted from each page, combined into a chapter |
+| Word (DOCX) | .docx | Paragraphs extracted with basic formatting (bold, italic, headings) |
+| RTF | .rtf | RTF tags stripped, plain text wrapped into HTML |
+| Markdown | .md | Converted to HTML, then treated like HTML input |
+| FictionBook | .fb2 | XML parsed, sections and paragraphs extracted |
+| OpenDocument | .odt | Text and paragraphs extracted |
+| Comic Book | .cbz | Images extracted from the zip, each becomes a page |
 
 Anything else in the folder gets skipped automatically — it won't break anything.
+
+## Supported Output Formats
+
+| Format | Extension | Notes |
+|---|---|---|
+| EPUB | .epub | EPUB 3 — the default, works everywhere |
+| Plain Text | .txt | All HTML stripped, chapters separated by dividers |
+| HTML | .html | Single styled HTML file with all chapters |
+| PDF | .pdf | Basic formatted PDF document |
+| Word (DOCX) | .docx | Word document with chapter headings |
+
+================================================================================
+
+## Watermark / DRM
+
+Every output file gets a hidden fingerprint (watermark) embedded into it. This is invisible during normal reading but can be used to trace where a file came from.
+
+The watermark uses multiple methods depending on the output format:
+- **Zero-width Unicode characters** sprinkled into the text
+- **Hidden HTML comments** and meta tags (EPUB, HTML)
+- **Document metadata** (PDF, DOCX, EPUB)
+- **Whitespace patterns** (TXT)
+
+Each merge gets a unique fingerprint — a UUID combined with a timestamp and hash. The fingerprint is printed in the log after every merge so you know what yours is.
+
+This is not DRM in the "you can't open the file" sense. It's more like a serial number baked into the content. You won't see it, but it's there.
 
 ================================================================================
 
@@ -74,9 +108,9 @@ Anything else in the folder gets skipped automatically — it won't break anythi
 
 - **Control the merge order** by naming your files with number prefixes: `01_prologue.epub`, `02_chapter1.epub`, `03_chapter2.txt`, etc. Files are merged alphabetically.
 - **Divider pages** are inserted between each source file by default, so you can tell where one ends and the next starts. You can turn this off in the GUI (uncheck the box) or by setting `ADD_DIVIDERS = False` in the config.
-- **Images** from EPUB files carry over into the merged output.
+- **Images** from EPUB and CBZ files carry over into the merged output.
 - **Table of contents** is auto-generated. Multi-chapter EPUBs get nested entries.
-- The output is **EPUB 3**, which works with pretty much everything: Calibre, Apple Books, Kobo, Rockbox, Kindle (via Send to Kindle or Calibre conversion), you name it.
+- The default output is **EPUB 3**, which works with pretty much everything: Calibre, Apple Books, Kobo, Rockbox, Kindle (via Send to Kindle or Calibre conversion), you name it.
 - **DRM-protected files won't work.** The script can't strip DRM and I'm not going to add that. If a file has DRM it'll just get skipped.
 
 ================================================================================
@@ -88,10 +122,11 @@ The GUI handles all of this through the window. These settings only matter if yo
 | Setting | What it does | Example |
 |---|---|---|
 | INPUT_DIR | Folder with your eBook files | `r"C:\Users\You\ebooks"` |
-| OUTPUT_FILE | Where to save the merged EPUB | `"merged_book.epub"` |
-| BOOK_TITLE | Title in the EPUB metadata | `"My Merged eBook"` |
-| BOOK_AUTHOR | Author in the EPUB metadata | `"Various Authors"` |
+| OUTPUT_FILE | Where to save the merged file | `"merged_book.epub"` |
+| BOOK_TITLE | Title in the output metadata | `"My Merged eBook"` |
+| BOOK_AUTHOR | Author in the output metadata | `"Various Authors"` |
 | ADD_DIVIDERS | Put a divider page between each file | `True` |
+| OUTPUT_FORMAT | Output file format | `"epub"`, `"txt"`, `"html"`, `"pdf"`, `"docx"` |
 
 ================================================================================
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════╗
-║              Simple eBook Merger v2.0                             ║
+║              Simple eBook Merger v3.0                             ║
 ║              github.com/GenerousGreivous/Simple-eBook-Merger      ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Merges multiple eBook files into a single EPUB.
-Supports EPUB, plain text (.txt), and HTML (.htm/.html) inputs.
+Merges multiple eBook files into a single output file.
+Supports EPUB, TXT, HTML, PDF, DOCX, RTF, Markdown, FB2, ODT,
+and CBZ inputs. Output formats: EPUB, TXT, HTML, PDF, DOCX.
 
 Wrote this because I got tired of juggling 30+ chapter files on
 my eReader whenever an author splits their work into individual
@@ -30,20 +31,35 @@ REQUIREMENTS
   (check "Add Python to PATH" during install)
 
   Then run once in your terminal:
-    pip install ebooklib beautifulsoup4 lxml
+    pip install ebooklib beautifulsoup4 lxml pypdf python-docx striprtf markdown odfpy fpdf2 Pillow
 
   tkinter ships with Python on Windows and Mac by default.
   On Linux you might need:  sudo apt install python3-tk
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SUPPORTED FORMATS
+SUPPORTED INPUT FORMATS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   .epub  — chapters, formatting, images all carried over
   .txt   — turned into a single chapter, paragraphs kept
   .html  — turned into a chapter, formatting kept
   .htm   — same as .html
+  .pdf   — text extracted from each page
+  .docx  — paragraphs extracted, basic formatting kept
+  .rtf   — RTF tags stripped, plain text wrapped into HTML
+  .md    — Markdown converted to HTML
+  .fb2   — FictionBook XML parsed into chapters
+  .odt   — OpenDocument text extracted
+  .cbz   — comic book images extracted as pages
 
   Anything else gets skipped automatically.
+
+SUPPORTED OUTPUT FORMATS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  .epub  — EPUB 3 (default)
+  .txt   — plain text
+  .html  — single HTML file
+  .pdf   — PDF document
+  .docx  — Word document
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NOTES
@@ -55,10 +71,13 @@ NOTES
   - EPUB inputs keep their chapter structure, TXT and HTML
     each become one chapter.
   - Images from EPUB files are preserved.
-  - Output is EPUB 3, works with Calibre, Apple Books, Kobo,
-    Kindle (via Send to Kindle / conversion), Rockbox, etc.
+  - Output is EPUB 3 by default, works with Calibre, Apple
+    Books, Kobo, Kindle (via Send to Kindle / conversion),
+    Rockbox, etc.
   - DRM-protected files won't work — the script doesn't and
     can't strip DRM.
+  - Every output file gets a hidden watermark fingerprint
+    for tracing. The fingerprint is shown in the log.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠  LEGAL DISCLAIMER — PLEASE READ, I'M BEGGING YOU
@@ -217,7 +236,14 @@ NOTES
 import os
 import sys
 import uuid
+import hashlib
+import random
+import re
+import html as html_module
 import threading
+import xml.etree.ElementTree as ET
+import zipfile
+import io
 from datetime import datetime
 
 # ── dependency checks ──
@@ -238,11 +264,49 @@ try:
 except ImportError:
     _missing.append("beautifulsoup4")
 
+try:
+    from pypdf import PdfReader
+except ImportError:
+    _missing.append("pypdf")
+
+try:
+    import docx as python_docx
+except ImportError:
+    _missing.append("python-docx")
+
+try:
+    from striprtf.striprtf import rtf_to_text
+except ImportError:
+    _missing.append("striprtf")
+
+try:
+    import markdown as md_lib
+except ImportError:
+    _missing.append("markdown")
+
+try:
+    from odf.opendocument import load as odf_load
+    from odf.text import P as OdfP
+    from odf import teletype as odf_teletype
+except ImportError:
+    _missing.append("odfpy")
+
+try:
+    from fpdf import FPDF
+except ImportError:
+    _missing.append("fpdf2")
+
+try:
+    from PIL import Image
+except ImportError:
+    _missing.append("Pillow")
+
 if _missing:
     print(
         "\n  Missing libraries: " + ", ".join(_missing) + "\n"
         "  Fix it by running:\n"
-        "    pip install ebooklib beautifulsoup4 lxml\n"
+        "    pip install ebooklib beautifulsoup4 lxml pypdf python-docx"
+        " striprtf markdown odfpy fpdf2 Pillow\n"
     )
     sys.exit(1)
 
@@ -255,7 +319,7 @@ if _missing:
 # Folder with the ebook files you want to merge
 INPUT_DIR = r"PUT_YOUR_FOLDER_PATH_HERE"
 
-# Where to save the merged epub
+# Where to save the merged file
 OUTPUT_FILE = "merged_book.epub"
 
 # Metadata
@@ -265,12 +329,157 @@ BOOK_AUTHOR = "Various Authors"
 # Stick a divider page between each source file?
 ADD_DIVIDERS = True
 
+# Output format: "epub", "txt", "html", "pdf", "docx"
+OUTPUT_FORMAT = "epub"
+
 # ══════════════════════════════════════════════════════════════
 # END OF CONFIG
 # ══════════════════════════════════════════════════════════════
 
 
-ALLOWED_EXTENSIONS = {".epub", ".txt", ".html", ".htm"}
+ALLOWED_EXTENSIONS = {
+    ".epub", ".txt", ".html", ".htm", ".pdf", ".docx",
+    ".rtf", ".md", ".fb2", ".odt", ".cbz",
+}
+
+OUTPUT_FORMATS = ["epub", "txt", "html", "pdf", "docx"]
+
+OUTPUT_EXT_MAP = {
+    "epub": ".epub",
+    "txt": ".txt",
+    "html": ".html",
+    "pdf": ".pdf",
+    "docx": ".docx",
+}
+
+
+# ──────────────────────────────────────────────────────────────
+# Watermark engine
+# ──────────────────────────────────────────────────────────────
+
+# Zero-width characters used to encode fingerprint bits
+_ZW_CHARS = ["\u200b", "\u200c", "\u200d", "\ufeff"]
+
+
+def _generate_watermark():
+    """
+    Create a fresh watermark fingerprint for this merge.
+    Returns a dict with the watermark ID, timestamp, and hash.
+    """
+    wm_id = uuid.uuid4().hex
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    raw = f"{wm_id}-{ts}"
+    wm_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
+    return {
+        "id": wm_id,
+        "timestamp": ts,
+        "hash": wm_hash,
+        "short": wm_id[:12],
+        "full_tag": f"wm:{wm_id[:12]}:{ts}:{wm_hash}",
+    }
+
+
+def _encode_zw(text, fingerprint):
+    """
+    Encode a fingerprint string as zero-width characters and
+    sprinkle them into the text at random-ish positions.
+    """
+    # convert fingerprint to a sequence of zero-width chars
+    zw_seq = ""
+    for ch in fingerprint:
+        idx = ord(ch) % len(_ZW_CHARS)
+        zw_seq += _ZW_CHARS[idx]
+
+    if len(text) < 10:
+        return text + zw_seq
+
+    # insert the zero-width sequence in chunks at spaced positions
+    chunk_size = max(1, len(zw_seq) // 5)
+    chunks = [zw_seq[i:i+chunk_size] for i in range(0, len(zw_seq), chunk_size)]
+
+    positions = sorted(random.sample(
+        range(10, max(11, len(text) - 1)),
+        min(len(chunks), max(1, len(text) // 50))
+    ))
+
+    result = list(text)
+    for pos, chunk in zip(positions, chunks):
+        if pos < len(result):
+            result[pos] = result[pos] + chunk
+    return "".join(result)
+
+
+def _embed_watermark_epub(book, wm):
+    """Add watermark to EPUB: metadata + HTML comments + zero-width chars."""
+    book.add_metadata(None, "meta", "", {"name": "wm", "content": wm["full_tag"]})
+    book.add_metadata("DC", "description",
+                       f"<!-- wm:{wm['short']} -->")
+
+    for item in book.get_items():
+        if item.get_type() == 9:  # xhtml
+            try:
+                content = item.get_content().decode("utf-8", errors="replace")
+                # add HTML comment watermark
+                comment = f"<!-- wm:{wm['full_tag']} -->"
+                if "</body>" in content:
+                    content = content.replace("</body>", f"{comment}\n</body>", 1)
+                # add zero-width chars to text
+                content = _encode_zw(content, wm["short"])
+                item.set_content(content.encode("utf-8"))
+            except Exception:
+                pass
+
+
+def _embed_watermark_text(text, wm):
+    """Add watermark to plain text: zero-width chars + whitespace patterns."""
+    # add zero-width encoded fingerprint
+    text = _encode_zw(text, wm["full_tag"])
+
+    # add trailing whitespace pattern to encode bits of the hash
+    lines = text.split("\n")
+    hash_bits = bin(int(wm["hash"][:8], 16))[2:].zfill(32)
+    for i, bit in enumerate(hash_bits):
+        if i < len(lines):
+            lines[i] = lines[i].rstrip() + (" " * (1 + int(bit)))
+    return "\n".join(lines)
+
+
+def _embed_watermark_html(html_str, wm):
+    """Add watermark to HTML: comments + zero-width chars + meta tag."""
+    comment = f"<!-- wm:{wm['full_tag']} -->"
+    meta = f'<meta name="wm" content="{wm["full_tag"]}">'
+
+    if "<head>" in html_str:
+        html_str = html_str.replace("<head>", f"<head>\n{meta}", 1)
+    if "</body>" in html_str:
+        html_str = html_str.replace("</body>", f"\n{comment}\n</body>", 1)
+
+    html_str = _encode_zw(html_str, wm["short"])
+    return html_str
+
+
+def _embed_watermark_pdf(pdf, wm):
+    """Add watermark to PDF metadata."""
+    pdf.set_creator(f"eBook Merger 3.0 [wm:{wm['short']}]")
+    pdf.set_subject(f"wm:{wm['full_tag']}")
+    pdf.set_keywords(wm["full_tag"])
+
+
+def _embed_watermark_docx(doc, wm):
+    """Add watermark to DOCX: custom properties + zero-width chars in first para."""
+    props = doc.core_properties
+    props.comments = f"wm:{wm['full_tag']}"
+    props.keywords = wm["full_tag"]
+
+    # add zero-width chars to first paragraph if it exists
+    if doc.paragraphs:
+        for para in doc.paragraphs[:3]:
+            if para.text.strip():
+                for run in para.runs:
+                    if run.text.strip():
+                        run.text = _encode_zw(run.text, wm["short"])
+                        break
+                break
 
 
 # ──────────────────────────────────────────────────────────────
@@ -316,6 +525,8 @@ def _make_divider(source_name, idx):
     ch.set_content(xhtml.encode("utf-8"))
     return ch
 
+
+# ── input format readers ──
 
 def _pull_epub_chapters(path, name, book, counter):
     """
@@ -490,16 +701,580 @@ def _html_to_chapter(path, name, counter):
     return (ch, label, words), counter, None
 
 
-def merge_files(files, output_path, title, author, dividers=True, log=print):
+def _read_pdf(path, name, counter):
+    """Extract text from a PDF, one chapter per page (or all as one)."""
+    label = os.path.splitext(name)[0]
+    chapters = []
+    total_words = 0
+
+    try:
+        reader = PdfReader(path)
+    except Exception as exc:
+        return None, counter, f"couldn't read PDF: {exc}"
+
+    all_text = []
+    for page_num, page in enumerate(reader.pages):
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            text = ""
+        all_text.append(text)
+
+    combined = "\n\n".join(all_text)
+    if not combined.strip():
+        return None, counter, "no text found in PDF"
+
+    counter += 1
+    words = len(combined.split())
+    total_words += words
+
+    paras = []
+    for ln in combined.split("\n"):
+        ln = ln.rstrip()
+        if ln:
+            ln = html_module.escape(ln)
+            paras.append(f"    <p>{ln}</p>")
+        else:
+            paras.append("    <p><br/></p>")
+
+    body = "\n".join(paras)
+    xhtml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">\n'
+        '<head><title>{t}</title></head>\n'
+        '<body>\n  <h1>{t}</h1>\n{b}\n</body>\n</html>\n'
+    ).format(t=label, b=body)
+
+    ch = epub.EpubHtml(title=label, file_name=f"chapter_{counter:04d}.xhtml", lang="en")
+    ch.set_content(xhtml.encode("utf-8"))
+    return (ch, label, words), counter, None
+
+
+def _read_docx(path, name, counter):
+    """Extract paragraphs from a DOCX file."""
+    label = os.path.splitext(name)[0]
+
+    try:
+        doc = python_docx.Document(path)
+    except Exception as exc:
+        return None, counter, f"couldn't read DOCX: {exc}"
+
+    counter += 1
+    paras = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            paras.append("    <p><br/></p>")
+            continue
+
+        # basic formatting: bold, italic, headings
+        style_name = (para.style.name or "").lower()
+        if "heading 1" in style_name:
+            paras.append(f"    <h1>{html_module.escape(text)}</h1>")
+        elif "heading 2" in style_name:
+            paras.append(f"    <h2>{html_module.escape(text)}</h2>")
+        elif "heading 3" in style_name:
+            paras.append(f"    <h3>{html_module.escape(text)}</h3>")
+        else:
+            # build inline formatting from runs
+            parts = []
+            for run in para.runs:
+                t = html_module.escape(run.text)
+                if run.bold and run.italic:
+                    t = f"<b><i>{t}</i></b>"
+                elif run.bold:
+                    t = f"<b>{t}</b>"
+                elif run.italic:
+                    t = f"<i>{t}</i>"
+                parts.append(t)
+            paras.append(f"    <p>{''.join(parts)}</p>")
+
+    full_text = " ".join(p.text for p in doc.paragraphs)
+    words = len(full_text.split())
+
+    body = "\n".join(paras)
+    xhtml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">\n'
+        '<head><title>{t}</title></head>\n'
+        '<body>\n  <h1>{t}</h1>\n{b}\n</body>\n</html>\n'
+    ).format(t=label, b=body)
+
+    ch = epub.EpubHtml(title=label, file_name=f"chapter_{counter:04d}.xhtml", lang="en")
+    ch.set_content(xhtml.encode("utf-8"))
+    return (ch, label, words), counter, None
+
+
+def _read_rtf(path, name, counter):
+    """Strip RTF formatting and turn into a chapter."""
+    label = os.path.splitext(name)[0]
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            raw = fh.read()
+        text = rtf_to_text(raw)
+    except Exception as exc:
+        return None, counter, f"couldn't read RTF: {exc}"
+
+    if not text.strip():
+        return None, counter, "empty RTF file"
+
+    counter += 1
+    words = len(text.split())
+
+    paras = []
+    for ln in text.split("\n"):
+        ln = ln.rstrip()
+        if ln:
+            paras.append(f"    <p>{html_module.escape(ln)}</p>")
+        else:
+            paras.append("    <p><br/></p>")
+
+    body = "\n".join(paras)
+    xhtml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">\n'
+        '<head><title>{t}</title></head>\n'
+        '<body>\n  <h1>{t}</h1>\n{b}\n</body>\n</html>\n'
+    ).format(t=label, b=body)
+
+    ch = epub.EpubHtml(title=label, file_name=f"chapter_{counter:04d}.xhtml", lang="en")
+    ch.set_content(xhtml.encode("utf-8"))
+    return (ch, label, words), counter, None
+
+
+def _read_markdown(path, name, counter):
+    """Convert Markdown to HTML and make a chapter."""
+    label = os.path.splitext(name)[0]
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            raw = fh.read()
+        html_content = md_lib.markdown(raw, extensions=["extra", "codehilite"])
+    except Exception as exc:
+        return None, counter, f"couldn't read Markdown: {exc}"
+
+    if not raw.strip():
+        return None, counter, "empty Markdown file"
+
+    counter += 1
+    words = len(raw.split())
+
+    xhtml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">\n'
+        '<head><title>{t}</title></head>\n'
+        '<body>\n  <h1>{t}</h1>\n{b}\n</body>\n</html>\n'
+    ).format(t=label, b=html_content)
+
+    ch = epub.EpubHtml(title=label, file_name=f"chapter_{counter:04d}.xhtml", lang="en")
+    ch.set_content(xhtml.encode("utf-8"))
+    return (ch, label, words), counter, None
+
+
+def _read_fb2(path, name, counter):
+    """Parse FictionBook2 XML into a chapter."""
+    label = os.path.splitext(name)[0]
+
+    try:
+        tree = ET.parse(path)
+        root = tree.getroot()
+    except Exception as exc:
+        return None, counter, f"couldn't read FB2: {exc}"
+
+    # FB2 namespace
+    ns = ""
+    if root.tag.startswith("{"):
+        ns = root.tag.split("}")[0] + "}"
+
+    # extract text from all <p> elements in <body>
+    body = root.find(f".//{ns}body")
+    if body is None:
+        return None, counter, "no body found in FB2"
+
+    paras = []
+    for p in body.iter(f"{ns}p"):
+        text = "".join(p.itertext()).strip()
+        if text:
+            paras.append(f"    <p>{html_module.escape(text)}</p>")
+
+    if not paras:
+        return None, counter, "no text found in FB2"
+
+    # try to get title from <title-info><book-title>
+    try:
+        ti = root.find(f".//{ns}title-info/{ns}book-title")
+        if ti is not None and ti.text:
+            label = ti.text.strip()
+    except Exception:
+        pass
+
+    counter += 1
+    full_text = " ".join("".join(p.itertext()) for p in body.iter(f"{ns}p"))
+    words = len(full_text.split())
+
+    body_html = "\n".join(paras)
+    xhtml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">\n'
+        '<head><title>{t}</title></head>\n'
+        '<body>\n  <h1>{t}</h1>\n{b}\n</body>\n</html>\n'
+    ).format(t=html_module.escape(label), b=body_html)
+
+    ch = epub.EpubHtml(title=label, file_name=f"chapter_{counter:04d}.xhtml", lang="en")
+    ch.set_content(xhtml.encode("utf-8"))
+    return (ch, label, words), counter, None
+
+
+def _read_odt(path, name, counter):
+    """Extract text from an ODT (OpenDocument Text) file."""
+    label = os.path.splitext(name)[0]
+
+    try:
+        doc = odf_load(path)
+    except Exception as exc:
+        return None, counter, f"couldn't read ODT: {exc}"
+
+    paras = []
+    for p in doc.getElementsByType(OdfP):
+        text = odf_teletype.extractText(p).strip()
+        if text:
+            paras.append(f"    <p>{html_module.escape(text)}</p>")
+        else:
+            paras.append("    <p><br/></p>")
+
+    if not any(t.strip() for t in paras):
+        return None, counter, "no text found in ODT"
+
+    counter += 1
+    full_text = " ".join(
+        odf_teletype.extractText(p) for p in doc.getElementsByType(OdfP)
+    )
+    words = len(full_text.split())
+
+    body = "\n".join(paras)
+    xhtml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">\n'
+        '<head><title>{t}</title></head>\n'
+        '<body>\n  <h1>{t}</h1>\n{b}\n</body>\n</html>\n'
+    ).format(t=label, b=body)
+
+    ch = epub.EpubHtml(title=label, file_name=f"chapter_{counter:04d}.xhtml", lang="en")
+    ch.set_content(xhtml.encode("utf-8"))
+    return (ch, label, words), counter, None
+
+
+def _read_cbz(path, name, book, counter):
+    """
+    Extract images from a CBZ (comic book zip) and add each
+    as a page in the output.
+    """
+    label = os.path.splitext(name)[0]
+    added = []
+
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            image_names = sorted([
+                n for n in zf.namelist()
+                if n.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
+                and not n.startswith("__MACOSX")
+            ])
+
+            if not image_names:
+                return [], counter, "no images found in CBZ"
+
+            for img_name in image_names:
+                counter += 1
+                img_data = zf.read(img_name)
+
+                # figure out the media type
+                ext = os.path.splitext(img_name)[1].lower()
+                media_types = {
+                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                    ".png": "image/png", ".gif": "image/gif",
+                    ".webp": "image/webp",
+                }
+                media_type = media_types.get(ext, "image/jpeg")
+
+                # add image to epub
+                img_fname = f"images/{_uid('cbz')}_{os.path.basename(img_name)}"
+                img_item = epub.EpubImage()
+                img_item.file_name = img_fname
+                img_item.media_type = media_type
+                img_item.set_content(img_data)
+                book.add_item(img_item)
+
+                # create an xhtml page for this image
+                page_title = f"{label} - Page {counter}"
+                xhtml = (
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<!DOCTYPE html>\n'
+                    '<html xmlns="http://www.w3.org/1999/xhtml"'
+                    ' xml:lang="en" lang="en">\n'
+                    '<head><title>{t}</title></head>\n'
+                    '<body style="text-align:center; margin:0; padding:0;">\n'
+                    '  <img src="{src}" alt="{t}"'
+                    ' style="max-width:100%; max-height:100vh;"/>\n'
+                    '</body>\n</html>\n'
+                ).format(t=page_title, src=img_fname)
+
+                ch = epub.EpubHtml(
+                    title=page_title,
+                    file_name=f"chapter_{counter:04d}.xhtml",
+                    lang="en",
+                )
+                ch.set_content(xhtml.encode("utf-8"))
+                book.add_item(ch)
+                added.append((ch, page_title))
+
+    except zipfile.BadZipFile:
+        return [], counter, "not a valid CBZ/zip file"
+    except Exception as exc:
+        return [], counter, f"couldn't read CBZ: {exc}"
+
+    return added, counter, None
+
+
+# ── output format writers ──
+
+def _strip_html_tags(html_str):
+    """Remove HTML tags and return plain text."""
+    try:
+        soup = BeautifulSoup(html_str, "lxml")
+        return soup.get_text(separator="\n")
+    except Exception:
+        return re.sub(r"<[^>]+>", "", html_str)
+
+
+def _chapters_to_content_list(chapters_data):
+    """
+    Normalize chapter data into a list of dicts with
+    'title' and 'content' (HTML string) keys.
+    """
+    result = []
+    for item in chapters_data:
+        if isinstance(item, dict):
+            result.append(item)
+        elif isinstance(item, tuple) and len(item) == 2:
+            ch, title = item
+            try:
+                content = ch.get_content().decode("utf-8", errors="replace")
+            except Exception:
+                content = str(ch.get_content())
+            result.append({"title": title, "content": content})
+    return result
+
+
+def _write_epub(chapters_data, spine_items, toc, output_path, title, author,
+                dividers_list, book, wm, log=print):
+    """Write the merged book as EPUB (the original format)."""
+    book.toc = toc
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ["nav"] + spine_items
+
+    _embed_watermark_epub(book, wm)
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    epub.write_epub(output_path, book, {})
+
+
+def _write_txt(chapters_data, output_path, title, author, wm, log=print):
+    """Write merged content as plain text."""
+    lines = []
+    lines.append(f"{'=' * 60}")
+    lines.append(f"  {title}")
+    lines.append(f"  by {author}")
+    lines.append(f"{'=' * 60}")
+    lines.append("")
+
+    content_list = _chapters_to_content_list(chapters_data)
+    for i, ch in enumerate(content_list):
+        if i > 0:
+            lines.append("")
+            lines.append(f"{'─' * 40}")
+            lines.append("")
+        lines.append(f"  {ch['title']}")
+        lines.append(f"{'─' * 40}")
+        lines.append("")
+        text = _strip_html_tags(ch["content"])
+        lines.append(text)
+
+    text_out = "\n".join(lines)
+    text_out = _embed_watermark_text(text_out, wm)
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(text_out)
+
+
+def _write_html(chapters_data, output_path, title, author, wm, log=print):
+    """Write merged content as a single HTML file."""
+    content_list = _chapters_to_content_list(chapters_data)
+
+    body_parts = []
+    for i, ch in enumerate(content_list):
+        if i > 0:
+            body_parts.append('    <hr style="margin: 2em 0;"/>')
+        body_parts.append(f'    <h2>{html_module.escape(ch["title"])}</h2>')
+
+        # extract just the body content from the xhtml
+        try:
+            soup = BeautifulSoup(ch["content"], "lxml")
+            body_tag = soup.find("body")
+            inner = body_tag.decode_contents() if body_tag else ch["content"]
+        except Exception:
+            inner = ch["content"]
+        body_parts.append(f"    {inner}")
+
+    html_out = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{html_module.escape(title)}</title>
+<style>
+  body {{ font-family: Georgia, 'Times New Roman', serif; max-width: 800px;
+         margin: 2em auto; padding: 0 1em; line-height: 1.6; color: #222; }}
+  h1 {{ text-align: center; border-bottom: 2px solid #333; padding-bottom: 0.5em; }}
+  h2 {{ margin-top: 2em; color: #444; }}
+  p {{ text-indent: 1.5em; margin: 0.5em 0; }}
+  hr {{ border: none; border-top: 1px solid #ccc; }}
+</style>
+</head>
+<body>
+  <h1>{html_module.escape(title)}</h1>
+  <p style="text-align:center; color:#666;">by {html_module.escape(author)}</p>
+{chr(10).join(body_parts)}
+</body>
+</html>"""
+
+    html_out = _embed_watermark_html(html_out, wm)
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_out)
+
+
+def _write_pdf(chapters_data, output_path, title, author, wm, log=print):
+    """Write merged content as a PDF."""
+    content_list = _chapters_to_content_list(chapters_data)
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_title(title)
+    pdf.set_author(author)
+
+    _embed_watermark_pdf(pdf, wm)
+
+    def _clean_for_pdf(s):
+        """Strip zero-width chars and force latin-1 safe text."""
+        for zw in "\u200b\u200c\u200d\ufeff":
+            s = s.replace(zw, "")
+        try:
+            s.encode("latin-1")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            s = s.encode("ascii", errors="replace").decode("ascii")
+        return s
+
+    # title page
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 24)
+    pdf.cell(0, 60, _clean_for_pdf(title), new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 14)
+    pdf.cell(0, 10, _clean_for_pdf(f"by {author}"), new_x="LMARGIN", new_y="NEXT", align="C")
+
+    for ch in content_list:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(0, 10, _clean_for_pdf(ch["title"]), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(5)
+
+        text = _strip_html_tags(ch["content"])
+        text = _clean_for_pdf(text)
+        pdf.set_font("Helvetica", "", 11)
+
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                pdf.ln(3)
+                continue
+            # reset x to left margin before each line just in case
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(w=0, h=5, text=line, new_x="LMARGIN", new_y="NEXT")
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    pdf.output(output_path)
+
+
+def _write_docx(chapters_data, output_path, title, author, wm, log=print):
+    """Write merged content as a DOCX file."""
+    content_list = _chapters_to_content_list(chapters_data)
+
+    doc = python_docx.Document()
+
+    # title
+    doc.add_heading(title, level=0)
+    doc.add_paragraph(f"by {author}")
+    doc.add_paragraph("")
+
+    for i, ch in enumerate(content_list):
+        if i > 0:
+            doc.add_page_break()
+        doc.add_heading(ch["title"], level=1)
+
+        text = _strip_html_tags(ch["content"])
+        for line in text.split("\n"):
+            line = line.strip()
+            if line:
+                doc.add_paragraph(line)
+
+    _embed_watermark_docx(doc, wm)
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    doc.save(output_path)
+
+
+# ── main merge function ──
+
+def merge_files(files, output_path, title, author, dividers=True,
+                output_format="epub", log=print):
     """
     The actual merge. Takes a list of (path, filename) tuples,
-    builds one epub, writes it to output_path.
+    builds the output in the requested format, writes it to output_path.
 
     `log` is a callable — in terminal mode it's just print(),
     in GUI mode it pushes text to the log widget.
 
     Returns a dict with stats or raises on fatal errors.
     """
+    # generate watermark for this merge
+    wm = _generate_watermark()
+
+    # we always build chapters using the epub structures internally,
+    # then convert to the target format at the end
     book = epub.EpubBook()
     book.set_identifier(f"merged-{uuid.uuid4().hex[:12]}")
     book.set_title(title)
@@ -512,6 +1287,7 @@ def merge_files(files, output_path, title, author, dividers=True, log=print):
     ch_count = 0
     ok_count = 0
     total_words = 0
+    all_chapters = []  # list of (ch_object, title) for output writers
 
     for i, (fpath, fname) in enumerate(files):
         ext = os.path.splitext(fname)[1].lower()
@@ -533,6 +1309,7 @@ def merge_files(files, output_path, title, author, dividers=True, log=print):
 
             for ch, _ in chapters:
                 spine_items.append(ch)
+            all_chapters.extend(chapters)
 
             if len(chapters) == 1:
                 toc.append(chapters[0])
@@ -548,28 +1325,56 @@ def merge_files(files, output_path, title, author, dividers=True, log=print):
             log(f"    ✓ {len(chapters)} chapter(s), ~{wc:,} words")
             ok_count += 1
 
-        elif ext == ".txt":
-            result, ch_count, err = _txt_to_chapter(fpath, fname, ch_count)
-            if err or not result:
-                log(f"    ⚠ {err or 'empty file'}")
+        elif ext == ".cbz":
+            chapters, ch_count, err = _read_cbz(fpath, fname, book, ch_count)
+            if err:
+                log(f"    ⚠ {err}")
                 continue
-            ch, label, wc = result
-            book.add_item(ch)
-            spine_items.append(ch)
-            toc.append(ch)
-            total_words += wc
-            log(f"    ✓ 1 chapter, ~{wc:,} words")
+            if not chapters:
+                log(f"    ⚠ no images found")
+                continue
+
+            for ch, _ in chapters:
+                spine_items.append(ch)
+            all_chapters.extend(chapters)
+
+            if len(chapters) == 1:
+                toc.append(chapters[0])
+            else:
+                sec = os.path.splitext(fname)[0]
+                toc.append((epub.Section(sec), [ch for ch, _ in chapters]))
+
+            log(f"    ✓ {len(chapters)} page(s)")
             ok_count += 1
 
-        elif ext in (".html", ".htm"):
-            result, ch_count, err = _html_to_chapter(fpath, fname, ch_count)
+        else:
+            # all single-chapter formats
+            reader_map = {
+                ".txt":  _txt_to_chapter,
+                ".html": _html_to_chapter,
+                ".htm":  _html_to_chapter,
+                ".pdf":  _read_pdf,
+                ".docx": _read_docx,
+                ".rtf":  _read_rtf,
+                ".md":   _read_markdown,
+                ".fb2":  _read_fb2,
+                ".odt":  _read_odt,
+            }
+            reader = reader_map.get(ext)
+            if not reader:
+                log(f"    ⚠ unsupported format: {ext}")
+                continue
+
+            result, ch_count, err = reader(fpath, fname, ch_count)
             if err or not result:
                 log(f"    ⚠ {err or 'empty file'}")
                 continue
+
             ch, label, wc = result
             book.add_item(ch)
             spine_items.append(ch)
             toc.append(ch)
+            all_chapters.append((ch, label))
             total_words += wc
             log(f"    ✓ 1 chapter, ~{wc:,} words")
             ok_count += 1
@@ -577,16 +1382,22 @@ def merge_files(files, output_path, title, author, dividers=True, log=print):
     if not spine_items:
         raise RuntimeError("Nothing to merge — no chapters were produced.")
 
-    book.toc = toc
-    book.add_item(epub.EpubNcx())
-    book.add_item(epub.EpubNav())
-    book.spine = ["nav"] + spine_items
+    # write output in the requested format
+    fmt = output_format.lower().strip()
 
-    out_dir = os.path.dirname(output_path)
-    if out_dir and not os.path.exists(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
-
-    epub.write_epub(output_path, book, {})
+    if fmt == "epub":
+        _write_epub(all_chapters, spine_items, toc, output_path, title, author,
+                     [], book, wm, log)
+    elif fmt == "txt":
+        _write_txt(all_chapters, output_path, title, author, wm, log)
+    elif fmt == "html":
+        _write_html(all_chapters, output_path, title, author, wm, log)
+    elif fmt == "pdf":
+        _write_pdf(all_chapters, output_path, title, author, wm, log)
+    elif fmt == "docx":
+        _write_docx(all_chapters, output_path, title, author, wm, log)
+    else:
+        raise RuntimeError(f"Unknown output format: {fmt}")
 
     size = os.path.getsize(output_path)
     if size > 1024 * 1024:
@@ -600,6 +1411,8 @@ def merge_files(files, output_path, title, author, dividers=True, log=print):
         "words": total_words,
         "size": size_nice,
         "path": os.path.abspath(output_path),
+        "watermark": wm["full_tag"],
+        "watermark_short": wm["short"],
     }
 
 
@@ -632,13 +1445,13 @@ def launch_gui():
     FONT_H   = ("Segoe UI", 13, "bold")
 
     root = tk.Tk()
-    root.title("Simple eBook Merger")
+    root.title("Simple eBook Merger v3.0")
     root.configure(bg=BG)
     root.resizable(True, True)
 
     # try to set a reasonable starting size
-    root.geometry("680x720")
-    root.minsize(520, 560)
+    root.geometry("680x780")
+    root.minsize(520, 600)
 
     # ── styles ──
     style = ttk.Style()
@@ -663,12 +1476,15 @@ def launch_gui():
     style.configure("TEntry", fieldbackground=BG_ENTRY, foreground=FG,
                      insertcolor=FG, font=FONT, padding=5)
 
+    style.configure("TCombobox", fieldbackground=BG_ENTRY, foreground=FG,
+                     font=FONT, padding=5)
+
     # ── layout ──
     outer = ttk.Frame(root, padding=20)
     outer.pack(fill="both", expand=True)
 
     # header
-    ttk.Label(outer, text="Simple eBook Merger", style="Head.TLabel").pack(anchor="w")
+    ttk.Label(outer, text="Simple eBook Merger v3.0", style="Head.TLabel").pack(anchor="w")
     ttk.Label(outer, text="Toss your files in a folder, pick it, hit merge.",
               style="Dim.TLabel").pack(anchor="w", pady=(0, 14))
 
@@ -699,15 +1515,48 @@ def launch_gui():
     output_entry.pack(side="left", fill="x", expand=True, padx=(8, 6))
 
     def pick_output():
+        fmt = format_var.get().lower()
+        ext = OUTPUT_EXT_MAP.get(fmt, ".epub")
+        ftypes = [
+            ("EPUB files", "*.epub"),
+            ("Text files", "*.txt"),
+            ("HTML files", "*.html"),
+            ("PDF files", "*.pdf"),
+            ("Word documents", "*.docx"),
+            ("All files", "*.*"),
+        ]
         f = filedialog.asksaveasfilename(
-            title="Save merged EPUB as",
-            defaultextension=".epub",
-            filetypes=[("EPUB files", "*.epub"), ("All files", "*.*")],
+            title="Save merged file as",
+            defaultextension=ext,
+            filetypes=ftypes,
         )
         if f:
             output_var.set(f)
 
     ttk.Button(row2, text="Browse...", command=pick_output).pack(side="right")
+
+    # ── output format row ──
+    row_fmt = ttk.Frame(outer)
+    row_fmt.pack(fill="x", pady=(0, 8))
+    ttk.Label(row_fmt, text="Output format:").pack(side="left")
+
+    format_var = tk.StringVar(value="EPUB")
+    format_combo = ttk.Combobox(
+        row_fmt, textvariable=format_var,
+        values=["EPUB", "TXT", "HTML", "PDF", "DOCX"],
+        state="readonly", width=10,
+    )
+    format_combo.pack(side="left", padx=(8, 0))
+
+    def _on_format_change(event=None):
+        fmt = format_var.get().lower()
+        ext = OUTPUT_EXT_MAP.get(fmt, ".epub")
+        current = output_var.get().strip()
+        if current:
+            base = os.path.splitext(current)[0]
+            output_var.set(base + ext)
+
+    format_combo.bind("<<ComboboxSelected>>", _on_format_change)
 
     # ── title / author row ──
     row3 = ttk.Frame(outer)
@@ -799,6 +1648,7 @@ def launch_gui():
         ttl    = title_var.get().strip() or "Merged eBook"
         auth   = author_var.get().strip() or "Unknown"
         divs   = dividers_var.get()
+        fmt    = format_var.get().lower()
 
         # clear old log
         log_text.configure(state="normal")
@@ -814,8 +1664,9 @@ def launch_gui():
 
         files, skipped = find_ebook_files(folder)
         if not files:
+            exts = ", ".join(sorted(ALLOWED_EXTENSIONS))
             messagebox.showwarning("Nothing to merge",
-                "No supported files (.epub, .txt, .html, .htm) found in that folder.")
+                f"No supported files ({exts}) found in that folder.")
             return
 
         # disable the button so you can't double-click
@@ -832,6 +1683,7 @@ def launch_gui():
                 stats = merge_files(
                     files, out, ttl, auth,
                     dividers=divs,
+                    output_format=fmt,
                     log=lambda m: root.after(0, write_log, m),
                 )
                 def _done():
@@ -840,6 +1692,7 @@ def launch_gui():
                               f"{stats['chapters']} chapter(s), "
                               f"~{stats['words']:,} words, {stats['size']}", "ok")
                     write_log(f"  Saved → {stats['path']}", "ok")
+                    write_log(f"  Watermark: {stats['watermark']}", "dim")
                     status_var.set("Done!")
                     merge_btn.configure(state="normal")
                 root.after(0, _done)
@@ -861,12 +1714,13 @@ def launch_gui():
 
 
 # ──────────────────────────────────────────────────────────────
-# Terminal (headless) mode — works the same as v1
+# Terminal (headless) mode — works the same as before, plus
+# output format support
 # ──────────────────────────────────────────────────────────────
 
 def run_terminal():
     print("\n" + "=" * 60)
-    print("  Simple eBook Merger v2.0")
+    print("  Simple eBook Merger v3.0")
     print("=" * 60 + "\n")
 
     print("⚠  LEGAL REMINDER:")
@@ -886,6 +1740,11 @@ def run_terminal():
     if not OUTPUT_FILE.strip():
         problems.append("OUTPUT_FILE isn't set.")
 
+    fmt = OUTPUT_FORMAT.lower().strip()
+    if fmt not in OUTPUT_FORMATS:
+        problems.append(f"OUTPUT_FORMAT '{OUTPUT_FORMAT}' isn't valid. "
+                        f"Use one of: {', '.join(OUTPUT_FORMATS)}")
+
     if problems:
         print("=" * 60)
         print("  Setup incomplete:")
@@ -902,8 +1761,9 @@ def run_terminal():
         print(f"  ⚠ skipping: {s}")
 
     if not files:
-        print("\nNo supported files found.")
-        print("  Supported: .epub, .txt, .html, .htm")
+        exts = ", ".join(sorted(ALLOWED_EXTENSIONS))
+        print(f"\nNo supported files found.")
+        print(f"  Supported: {exts}")
         print("  Double-check INPUT_DIR.\n")
         return
 
@@ -911,17 +1771,19 @@ def run_terminal():
     for _, name in files:
         print(f"    • {name}")
 
-    print(f"\n→ Merging...\n")
+    print(f"\n→ Merging into {fmt.upper()} format...\n")
 
     try:
         stats = merge_files(files, OUTPUT_FILE, BOOK_TITLE, BOOK_AUTHOR,
-                            dividers=ADD_DIVIDERS)
+                            dividers=ADD_DIVIDERS, output_format=fmt)
 
         print(f"\n" + "=" * 60)
         print(f"  Files merged   : {stats['files_merged']}")
         print(f"  Chapters total : {stats['chapters']}")
         print(f"  Total words    : ~{stats['words']:,}")
         print(f"  Output size    : {stats['size']}")
+        print(f"  Output format  : {fmt.upper()}")
+        print(f"  Watermark      : {stats['watermark']}")
         print("=" * 60)
         print(f"\n✓ Done! Saved to:\n  {stats['path']}\n")
 
