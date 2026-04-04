@@ -43,8 +43,15 @@ REQUIREMENTS
   Python 3.8+  →  https://python.org/downloads
   (check "Add Python to PATH" during install)
 
-  Then run once in your terminal:
-    pip install ebooklib beautifulsoup4 lxml pypdf python-docx striprtf markdown odfpy fpdf2 Pillow
+  Required (always needed):
+    pip install ebooklib beautifulsoup4 lxml
+
+  Optional (install for extra format support):
+    pip install pypdf          # PDF input
+    pip install python-docx    # DOCX read/write
+    pip install odfpy          # ODT input
+    pip install fpdf2          # PDF output
+    pip install Pillow         # CBZ input + cover images
 
   tkinter ships with Python on Windows and Mac by default.
   On Linux you might need:  sudo apt install python3-tk
@@ -56,13 +63,13 @@ SUPPORTED INPUT FORMATS
   .txt   — turned into a single chapter, paragraphs kept
   .html  — turned into a chapter, formatting kept
   .htm   — same as .html
-  .pdf   — text extracted from each page
-  .docx  — paragraphs extracted, basic formatting kept
+  .pdf   — text extracted from each page (needs pypdf)
+  .docx  — paragraphs extracted, basic formatting kept (needs python-docx)
   .rtf   — RTF tags stripped, plain text wrapped into HTML
   .md    — Markdown converted to HTML
   .fb2   — FictionBook XML parsed into chapters
-  .odt   — OpenDocument text extracted
-  .cbz   — comic book images extracted as pages
+  .odt   — OpenDocument text extracted (needs odfpy)
+  .cbz   — comic book images extracted as pages (needs Pillow)
 
   Anything else gets skipped automatically.
 
@@ -71,8 +78,8 @@ SUPPORTED OUTPUT FORMATS
   .epub  — EPUB 3 (default)
   .txt   — plain text
   .html  — single HTML file
-  .pdf   — PDF document
-  .docx  — Word document
+  .pdf   — PDF document (needs fpdf2)
+  .docx  — Word document (needs python-docx)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NOTES
@@ -109,7 +116,7 @@ NOTES
      anything else, that's a you problem, not a me problem.
 
   2. COPYRIGHT — DON'T BE THAT GUY
-     The stuff you merge is almost certainly copyrighted by
+     The stuff you merge is almost definitely copyrighted by
      someone who isn't you. You may NOT, under any
      circumstances, in this universe or any parallel one:
        • Share, upload, email, fax, telegraph, send via
@@ -252,68 +259,363 @@ import io
 from datetime import datetime
 
 # ── dependency checks ──
-# doing these early so we can bail with a helpful message
-# instead of a cryptic traceback
+# only ebooklib + bs4 + lxml are required now — everything
+# else is optional and we fall back gracefully
 
-_missing = []
+_missing_required = []
 
 try:
     from ebooklib import epub
 except ImportError:
-    _missing.append("ebooklib")
+    _missing_required.append("ebooklib")
 
 try:
     from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
     import warnings
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 except ImportError:
-    _missing.append("beautifulsoup4")
+    _missing_required.append("beautifulsoup4")
 
+# lxml is needed by bs4 for proper parsing
+try:
+    import lxml  # noqa: F401
+except ImportError:
+    _missing_required.append("lxml")
+
+if _missing_required:
+    print(
+        "\n  Missing required libraries: " + ", ".join(_missing_required) + "\n"
+        "  Fix it by running:\n"
+        "    pip install ebooklib beautifulsoup4 lxml\n"
+    )
+    sys.exit(1)
+
+# ── optional deps — each one gets a flag so we can check later ──
+
+HAS_PYPDF = False
 try:
     from pypdf import PdfReader
+    HAS_PYPDF = True
 except ImportError:
-    _missing.append("pypdf")
+    pass
 
+HAS_DOCX = False
 try:
     import docx as python_docx
+    HAS_DOCX = True
 except ImportError:
-    _missing.append("python-docx")
+    pass
 
-try:
-    from striprtf.striprtf import rtf_to_text
-except ImportError:
-    _missing.append("striprtf")
-
-try:
-    import markdown as md_lib
-except ImportError:
-    _missing.append("markdown")
-
+HAS_ODFPY = False
 try:
     from odf.opendocument import load as odf_load
     from odf.text import P as OdfP
     from odf import teletype as odf_teletype
+    HAS_ODFPY = True
 except ImportError:
-    _missing.append("odfpy")
+    pass
 
+HAS_FPDF2 = False
 try:
     from fpdf import FPDF
+    HAS_FPDF2 = True
 except ImportError:
-    _missing.append("fpdf2")
+    pass
 
+HAS_PILLOW = False
 try:
     from PIL import Image
+    HAS_PILLOW = True
 except ImportError:
-    _missing.append("Pillow")
+    pass
 
-if _missing:
-    print(
-        "\n  Missing libraries: " + ", ".join(_missing) + "\n"
-        "  Fix it by running:\n"
-        "    pip install ebooklib beautifulsoup4 lxml pypdf python-docx"
-        " striprtf markdown odfpy fpdf2 Pillow\n"
+
+# ── inlined striprtf — tiny lib, saves a pip install ──
+# ported from the striprtf package (MIT license), trimmed down
+
+def _inlined_rtf_to_text(rtf_text):
+    """Strip RTF control words and return plain text.
+    This is a simplified version of striprtf.rtf_to_text()."""
+    # i literally just grabbed the core logic from striprtf so
+    # people don't need to install a whole package for ~80 lines
+    pattern = re.compile(
+        r"\\([a-z]{1,32})(-?\d{1,10})?[ ]?|\\'([0-9a-f]{2})|\\([^a-z])|([{}])|[\r\n]+|(.)",
+        re.I,
     )
-    sys.exit(1)
+    destinations = frozenset((
+        'aftncn', 'aftnsep', 'aftnsepc', 'annotation', 'atnauthor',
+        'atndate', 'atnicn', 'atnid', 'atnparent', 'atnref', 'atntime',
+        'atrfend', 'atrfstart', 'author', 'background', 'bkmkend',
+        'bkmkstart', 'blipuid', 'buptim', 'category', 'colorschememapping',
+        'colortbl', 'comment', 'company', 'creatim', 'datafield',
+        'datastore', 'defchp', 'defpap', 'do', 'doccomm', 'docvar',
+        'dptxbxtext', 'ebcend', 'ebcstart', 'factoidname', 'falt',
+        'fchars', 'ffdeftext', 'ffentrymcr', 'ffexitmcr', 'ffformat',
+        'ffhelptext', 'ffl', 'ffname', 'ffstattext', 'field', 'file',
+        'filetbl', 'fldinst', 'fldrslt', 'fldtype', 'fname', 'fontemb',
+        'fontfile', 'fonttbl', 'footer', 'footerf', 'footerl', 'footerr',
+        'footnote', 'formfield', 'ftncn', 'ftnsep', 'ftnsepc', 'g',
+        'generator', 'gridtbl', 'header', 'headerf', 'headerl',
+        'headerr', 'hl', 'hlfr', 'hlinkbase', 'hlloc', 'hlsrc', 'hsv',
+        'htmltag', 'info', 'keycode', 'keywords', 'latentstyles',
+        'lchars', 'levelnumbers', 'leveltext', 'lfolevel', 'linkval',
+        'list', 'listlevel', 'listname', 'listoverride', 'listoverridetable',
+        'listpicture', 'liststylename', 'listtable', 'listtext',
+        'lsdlockedexcept', 'macc', 'maccPr', 'mailmerge', 'maln',
+        'malnScr', 'manager', 'margPr', 'mbar', 'mbarPr', 'mbaseJc',
+        'mbegChr', 'mborderBox', 'mborderBoxPr', 'mbox', 'mboxPr',
+        'mchr', 'mcount', 'mctrlPr', 'md', 'mdeg', 'mdegHide', 'mden',
+        'mdiff', 'mdPr', 'me', 'mendChr', 'meqArr', 'meqArrPr', 'mf',
+        'mfName', 'mfPr', 'mfunc', 'mfuncPr', 'mgroupChr',
+        'mgroupChrPr', 'mgrow', 'mhideBot', 'mhideLeft', 'mhideRight',
+        'mhideTop', 'mhtmltag', 'mlim', 'mlimloc', 'mlimlow',
+        'mlimlowPr', 'mlimupp', 'mlimuppPr', 'mm', 'mmaddfieldname',
+        'mmath', 'mmathPict', 'mmathPr', 'mmaxdist', 'mmc', 'mmcJc',
+        'mmconnectstr', 'mmconnectstrdata', 'mmcPr', 'mmcs',
+        'mmdatasource', 'mmheadersource', 'mmmailsubject', 'mmodso',
+        'mmodsofilter', 'mmodsofldmpdata', 'mmodsomappedname',
+        'mmodsoname', 'mmodsorecipdata', 'mmodsosort', 'mmodsosrc',
+        'mmodsotable', 'mmodsoudl', 'mmodsoudldata', 'mmodsouniquetag',
+        'mmPr', 'mmquery', 'mmr', 'mnary', 'mnaryPr', 'mnoBreak',
+        'mnum', 'mobjDist', 'moMath', 'moMathPara', 'moMathParaPr',
+        'mopEmu', 'mphant', 'mphantPr', 'mplcHide', 'mpos', 'mr',
+        'mrad', 'mradPr', 'mrPr', 'msepChr', 'mshow', 'mshp', 'msPre',
+        'msPrePr', 'msSub', 'msSubPr', 'msSubSup', 'msSubSupPr',
+        'msSup', 'msSupPr', 'mstrikeBLTR', 'mstrikeH', 'mstrikeTLBR',
+        'mstrikeV', 'msub', 'msubHide', 'msup', 'msupHide', 'mtransp',
+        'mtype', 'mvertJc', 'mvfmf', 'mvfml', 'mvjc', 'mvtof', 'mvtol',
+        'mzeroAsc', 'mzeroDesc', 'mzeroWid', 'nesttableprops',
+        'nextfile', 'nonesttables', 'objalias', 'objclass', 'objdata',
+        'object', 'objname', 'objsect', 'objtime', 'oldcprops',
+        'oldpprops', 'oldsprops', 'oldtprops', 'oleclsid', 'operator',
+        'panose', 'password', 'passwordhash', 'pgp', 'pgptbl',
+        'picprop', 'pict', 'pn', 'pnseclvl', 'pntext', 'pntxta',
+        'pntxtb', 'printim', 'private', 'propname', 'protend',
+        'protstart', 'protusertbl', 'pxe', 'result', 'revtbl',
+        'revtim', 'rsidtbl', 'rxe', 'shp', 'shpgrp', 'shpinst',
+        'shppict', 'shprslt', 'shptxt', 'sn', 'sp', 'staticval',
+        'stylesheet', 'subject', 'sv', 'svb', 'tc', 'template',
+        'themedata', 'title', 'txe', 'ud', 'upr', 'userprops',
+        'wgrffmtfilter', 'windowcaption', 'writereservation',
+        'writereservhash', 'xe', 'xform', 'xmlattrname', 'xmlattrvalue',
+        'xmlclose', 'xmlname', 'xmlnstbl', 'xmlopen',
+    ))
+    # special chars
+    specialchars = {
+        'par': '\n', 'sect': '\n\n', 'page': '\n\n',
+        'line': '\n', 'tab': '\t',
+        'emdash': '\u2014', 'endash': '\u2013',
+        'emspace': '\u2003', 'enspace': '\u2002',
+        'qmspace': '\u2005', 'bullet': '\u2022',
+        'lquote': '\u2018', 'rquote': '\u2019',
+        'ldblquote': '\u201c', 'rdblquote': '\u201d',
+    }
+
+    stack = []
+    ignorable = False
+    ucskip = 1
+    curskip = 0
+    out = []
+
+    for match in pattern.finditer(rtf_text):
+        word, arg, hexval, char, brace, tchar = match.groups()
+        if brace:
+            curskip = 0
+            if brace == '{':
+                stack.append((ucskip, ignorable))
+            elif brace == '}':
+                if stack:
+                    ucskip, ignorable = stack.pop()
+        elif char:
+            curskip = 0
+            if char == '~':
+                if not ignorable:
+                    out.append('\u00a0')
+            elif char in '{}\\':
+                if not ignorable:
+                    out.append(char)
+            elif char == '*':
+                ignorable = True
+        elif word:
+            curskip = 0
+            if word in destinations:
+                ignorable = True
+            elif ignorable:
+                pass
+            elif word in specialchars:
+                out.append(specialchars[word])
+            elif word == 'uc':
+                ucskip = int(arg) if arg else 1
+            elif word == 'u':
+                c = int(arg) if arg else 0
+                if c < 0:
+                    c += 0x10000
+                out.append(chr(c))
+                curskip = ucskip
+        elif hexval:
+            if curskip > 0:
+                curskip -= 1
+            elif not ignorable:
+                out.append(chr(int(hexval, 16)))
+        elif tchar:
+            if curskip > 0:
+                curskip -= 1
+            elif not ignorable:
+                out.append(tchar)
+
+    return ''.join(out)
+
+
+# try to use the real striprtf if installed, else use our inlined version
+HAS_STRIPRTF = False
+try:
+    from striprtf.striprtf import rtf_to_text
+    HAS_STRIPRTF = True
+except ImportError:
+    rtf_to_text = _inlined_rtf_to_text
+
+
+# ── inlined markdown converter — handles the basics so we don't need
+# the markdown package for simple stuff ──
+
+def _inlined_markdown_to_html(text):
+    """Convert basic markdown to HTML. Handles headers, bold, italic,
+    links, images, code blocks, lists, blockquotes, and horizontal rules.
+    Not perfect but good enough for most ebook chapters."""
+    lines = text.split('\n')
+    html_lines = []
+    in_code_block = False
+    in_list = False
+    list_type = None
+
+    for line in lines:
+        # fenced code blocks
+        if line.strip().startswith('```'):
+            if in_code_block:
+                html_lines.append('</code></pre>')
+                in_code_block = False
+            else:
+                html_lines.append('<pre><code>')
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            html_lines.append(html_module.escape(line))
+            continue
+
+        # close list if we're not in a list item anymore
+        stripped = line.strip()
+        is_list_item = bool(re.match(r'^[\*\-\+]\s', stripped)) or bool(re.match(r'^\d+\.\s', stripped))
+        if in_list and not is_list_item and stripped:
+            html_lines.append(f'</{list_type}>')
+            in_list = False
+            list_type = None
+
+        # blank lines
+        if not stripped:
+            if in_list:
+                pass  # keep list going through blank lines
+            else:
+                html_lines.append('')
+            continue
+
+        # headers
+        m = re.match(r'^(#{1,6})\s+(.*)', line)
+        if m:
+            level = len(m.group(1))
+            content = _inline_markdown(m.group(2))
+            html_lines.append(f'<h{level}>{content}</h{level}>')
+            continue
+
+        # horizontal rules
+        if re.match(r'^[\-\*_]{3,}\s*$', stripped):
+            html_lines.append('<hr/>')
+            continue
+
+        # blockquotes
+        if stripped.startswith('>'):
+            content = _inline_markdown(stripped.lstrip('>').strip())
+            html_lines.append(f'<blockquote><p>{content}</p></blockquote>')
+            continue
+
+        # unordered list
+        m = re.match(r'^[\*\-\+]\s+(.*)', stripped)
+        if m:
+            if not in_list or list_type != 'ul':
+                if in_list:
+                    html_lines.append(f'</{list_type}>')
+                html_lines.append('<ul>')
+                in_list = True
+                list_type = 'ul'
+            html_lines.append(f'<li>{_inline_markdown(m.group(1))}</li>')
+            continue
+
+        # ordered list
+        m = re.match(r'^\d+\.\s+(.*)', stripped)
+        if m:
+            if not in_list or list_type != 'ol':
+                if in_list:
+                    html_lines.append(f'</{list_type}>')
+                html_lines.append('<ol>')
+                in_list = True
+                list_type = 'ol'
+            html_lines.append(f'<li>{_inline_markdown(m.group(1))}</li>')
+            continue
+
+        # regular paragraph
+        html_lines.append(f'<p>{_inline_markdown(stripped)}</p>')
+
+    if in_code_block:
+        html_lines.append('</code></pre>')
+    if in_list:
+        html_lines.append(f'</{list_type}>')
+
+    return '\n'.join(html_lines)
+
+
+def _inline_markdown(text):
+    """Handle inline markdown: bold, italic, code, links, images."""
+    # inline code
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+    # images (before links so ![...](...) doesn't match [...](...)
+    text = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'<img src="\2" alt="\1"/>', text)
+    # links
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
+    # bold+italic
+    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text)
+    text = re.sub(r'___(.+?)___', r'<b><i>\1</i></b>', text)
+    # bold
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+    # italic
+    text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
+    text = re.sub(r'_(.+?)_', r'<i>\1</i>', text)
+    # strikethrough
+    text = re.sub(r'~~(.+?)~~', r'<del>\1</del>', text)
+    return text
+
+
+# try to use the real markdown lib if installed, else use our inlined version
+HAS_MARKDOWN = False
+try:
+    import markdown as md_lib
+    HAS_MARKDOWN = True
+except ImportError:
+    pass
+
+
+def _md_to_html(text):
+    """Convert markdown to HTML using the best available method."""
+    if HAS_MARKDOWN:
+        try:
+            return md_lib.markdown(text, extensions=["extra", "codehilite"])
+        except Exception:
+            # if codehilite isn't available, try without
+            try:
+                return md_lib.markdown(text, extensions=["extra"])
+            except Exception:
+                return md_lib.markdown(text)
+    return _inlined_markdown_to_html(text)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -364,8 +666,16 @@ OUTPUT_EXT_MAP = {
 # ── profile keys (the fields we save/load) ──
 _PROFILE_KEYS = [
     "name", "input_dir", "output_file", "book_title", "book_author",
-    "add_dividers", "output_format", "sort_order", "created", "updated",
+    "add_dividers", "output_format", "sort_order", "cover_mode",
+    "cover_path", "created", "updated",
 ]
+
+
+def _app_dir():
+    """Returns ~/.ebook_merger, creating it if needed."""
+    base = os.path.join(os.path.expanduser("~"), ".ebook_merger")
+    os.makedirs(base, exist_ok=True)
+    return base
 
 
 def _profiles_dir():
@@ -413,6 +723,8 @@ def save_profile(name, settings):
         "add_dividers": bool(settings.get("add_dividers", True)),
         "output_format": settings.get("output_format", "epub").lower(),
         "sort_order": settings.get("sort_order", "smart").lower(),
+        "cover_mode": settings.get("cover_mode", "none"),
+        "cover_path": settings.get("cover_path", ""),
         "created": created,
         "updated": today,
     }
@@ -462,6 +774,58 @@ def list_profiles():
         except (json.JSONDecodeError, OSError):
             continue
     return results
+
+
+# ── merge history ──
+
+def _history_path():
+    return os.path.join(_app_dir(), "history.json")
+
+
+def _load_history():
+    """Load merge history from disk."""
+    path = _history_path()
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, list):
+            return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+def _save_history(entries):
+    """Save merge history to disk, capped at 100 entries."""
+    entries = entries[-100:]  # keep only last 100
+    path = _history_path()
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(entries, fh, indent=2)
+    except OSError:
+        pass
+
+
+def _add_history_entry(input_files, output_path, output_format, title, author,
+                       dividers, sort_order, cover_mode="none", cover_path=""):
+    """Record a merge in history."""
+    entries = _load_history()
+    entries.append({
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "input_files": [f for _, f in input_files] if input_files else [],
+        "input_paths": [p for p, _ in input_files] if input_files else [],
+        "output_path": os.path.abspath(output_path),
+        "output_format": output_format,
+        "title": title,
+        "author": author,
+        "dividers": dividers,
+        "sort_order": sort_order,
+        "cover_mode": cover_mode,
+        "cover_path": cover_path,
+    })
+    _save_history(entries)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -730,6 +1094,21 @@ def find_ebook_files(folder, sort_order="smart"):
     return hits, skipped, sort_summary
 
 
+def find_ebook_files_recursive(folder):
+    """Scan a folder recursively for all supported ebook files.
+    Returns a list of (full_path, relative_path) tuples."""
+    results = []
+    for dirpath, _dirnames, filenames in os.walk(folder):
+        for name in sorted(filenames):
+            ext = os.path.splitext(name)[1].lower()
+            if ext in ALLOWED_EXTENSIONS:
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, folder)
+                results.append((full, rel))
+    results.sort(key=lambda x: x[1].lower())
+    return results
+
+
 def _uid(prefix="item"):
     """Short random id so filenames inside the epub don't collide."""
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
@@ -931,9 +1310,10 @@ def _html_to_chapter(path, name, counter):
 
 def _read_pdf(path, name, counter):
     """Extract text from a PDF, one chapter per page (or all as one)."""
+    if not HAS_PYPDF:
+        return None, counter, "PDF input needs pypdf — pip install pypdf"
+
     label = os.path.splitext(name)[0]
-    chapters = []
-    total_words = 0
 
     try:
         reader = PdfReader(path)
@@ -954,7 +1334,6 @@ def _read_pdf(path, name, counter):
 
     counter += 1
     words = len(combined.split())
-    total_words += words
 
     paras = []
     for ln in combined.split("\n"):
@@ -981,6 +1360,9 @@ def _read_pdf(path, name, counter):
 
 def _read_docx(path, name, counter):
     """Extract paragraphs from a DOCX file."""
+    if not HAS_DOCX:
+        return None, counter, "DOCX input needs python-docx — pip install python-docx"
+
     label = os.path.splitext(name)[0]
 
     try:
@@ -1081,7 +1463,7 @@ def _read_markdown(path, name, counter):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
-        html_content = md_lib.markdown(raw, extensions=["extra", "codehilite"])
+        html_content = _md_to_html(raw)
     except Exception as exc:
         return None, counter, f"couldn't read Markdown: {exc}"
 
@@ -1161,6 +1543,9 @@ def _read_fb2(path, name, counter):
 
 def _read_odt(path, name, counter):
     """Extract text from an ODT (OpenDocument Text) file."""
+    if not HAS_ODFPY:
+        return None, counter, "ODT input needs odfpy — pip install odfpy"
+
     label = os.path.splitext(name)[0]
 
     try:
@@ -1204,6 +1589,9 @@ def _read_cbz(path, name, book, counter):
     Extract images from a CBZ (comic book zip) and add each
     as a page in the output.
     """
+    if not HAS_PILLOW:
+        return [], counter, "CBZ input needs Pillow — pip install Pillow"
+
     label = os.path.splitext(name)[0]
     added = []
 
@@ -1270,6 +1658,176 @@ def _read_cbz(path, name, book, counter):
     return added, counter, None
 
 
+# ── chapter preview helper ──
+
+def _preview_file_text(path, max_chars=500):
+    """Extract the first ~max_chars of text from a file for preview.
+    Returns a string of plain text, or an error message."""
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".epub":
+            src = epub.read_epub(path, options={"ignore_ncx": True})
+            texts = []
+            for item in src.get_items():
+                if item.get_type() == 9:
+                    raw = item.get_content().decode("utf-8", errors="replace")
+                    soup = BeautifulSoup(raw, "lxml")
+                    texts.append(soup.get_text(separator="\n"))
+                    if len("\n".join(texts)) > max_chars:
+                        break
+            return "\n".join(texts)[:max_chars]
+
+        elif ext in (".txt", ".md", ".rtf"):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                raw = fh.read(max_chars + 200)
+            if ext == ".rtf":
+                raw = rtf_to_text(raw)
+            return raw[:max_chars]
+
+        elif ext in (".html", ".htm"):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                raw = fh.read(max_chars * 3)
+            soup = BeautifulSoup(raw, "lxml")
+            return soup.get_text(separator="\n")[:max_chars]
+
+        elif ext == ".pdf":
+            if not HAS_PYPDF:
+                return "(PDF preview needs pypdf)"
+            reader = PdfReader(path)
+            texts = []
+            for page in reader.pages:
+                texts.append(page.extract_text() or "")
+                if len("\n".join(texts)) > max_chars:
+                    break
+            return "\n".join(texts)[:max_chars]
+
+        elif ext == ".docx":
+            if not HAS_DOCX:
+                return "(DOCX preview needs python-docx)"
+            doc = python_docx.Document(path)
+            texts = []
+            for para in doc.paragraphs:
+                texts.append(para.text)
+                if len("\n".join(texts)) > max_chars:
+                    break
+            return "\n".join(texts)[:max_chars]
+
+        elif ext == ".fb2":
+            tree = ET.parse(path)
+            root = tree.getroot()
+            ns = ""
+            if root.tag.startswith("{"):
+                ns = root.tag.split("}")[0] + "}"
+            body = root.find(f".//{ns}body")
+            if body is None:
+                return "(no body in FB2)"
+            texts = []
+            for p in body.iter(f"{ns}p"):
+                texts.append("".join(p.itertext()))
+                if len("\n".join(texts)) > max_chars:
+                    break
+            return "\n".join(texts)[:max_chars]
+
+        elif ext == ".odt":
+            if not HAS_ODFPY:
+                return "(ODT preview needs odfpy)"
+            doc = odf_load(path)
+            texts = []
+            for p in doc.getElementsByType(OdfP):
+                texts.append(odf_teletype.extractText(p))
+                if len("\n".join(texts)) > max_chars:
+                    break
+            return "\n".join(texts)[:max_chars]
+
+        elif ext == ".cbz":
+            return "(CBZ contains images — no text preview)"
+
+        else:
+            return f"(no preview for {ext} files)"
+
+    except Exception as exc:
+        return f"(preview error: {exc})"
+
+
+# ── cover image helpers ──
+
+def _extract_epub_cover(epub_path):
+    """Try to pull the cover image bytes from an epub. Returns (data, ext) or (None, None)."""
+    try:
+        src = epub.read_epub(epub_path, options={"ignore_ncx": True})
+        # check metadata for cover image id
+        cover_id = None
+        for meta in src.get_metadata("OPF", "meta") or []:
+            # meta is a tuple like ({attribs}, content)
+            if isinstance(meta, tuple) and len(meta) >= 1:
+                attrs = meta[0] if isinstance(meta[0], dict) else {}
+                if not isinstance(attrs, dict):
+                    # sometimes it's (content, attrs)
+                    if len(meta) >= 2 and isinstance(meta[1], dict):
+                        attrs = meta[1]
+                if attrs.get("name") == "cover":
+                    cover_id = attrs.get("content")
+                    break
+
+        for item in src.get_items():
+            if item.get_type() == 6:  # image
+                if cover_id and item.get_id() == cover_id:
+                    ext = os.path.splitext(item.get_name())[1].lower() or ".jpg"
+                    return item.get_content(), ext
+        # fallback: grab the first image
+        for item in src.get_items():
+            if item.get_type() == 6:
+                ext = os.path.splitext(item.get_name())[1].lower() or ".jpg"
+                return item.get_content(), ext
+    except Exception:
+        pass
+    return None, None
+
+
+def _extract_cbz_first_image(cbz_path):
+    """Grab the first image from a CBZ. Returns (data, ext) or (None, None)."""
+    try:
+        with zipfile.ZipFile(cbz_path, "r") as zf:
+            names = sorted([
+                n for n in zf.namelist()
+                if n.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
+                and not n.startswith("__MACOSX")
+            ])
+            if names:
+                ext = os.path.splitext(names[0])[1].lower()
+                return zf.read(names[0]), ext
+    except Exception:
+        pass
+    return None, None
+
+
+def _get_cover_image_data(cover_mode, cover_path, input_files):
+    """Resolve cover image based on mode. Returns (image_bytes, ext) or (None, None).
+    cover_mode is 'browse', 'auto', or 'none'."""
+    if cover_mode == "none":
+        return None, None
+
+    if cover_mode == "browse" and cover_path and os.path.isfile(cover_path):
+        try:
+            with open(cover_path, "rb") as f:
+                data = f.read()
+            ext = os.path.splitext(cover_path)[1].lower()
+            return data, ext
+        except Exception:
+            return None, None
+
+    if cover_mode == "auto" and input_files:
+        # try the first file — if it's an epub, grab its cover
+        first_path = input_files[0][0]
+        first_ext = os.path.splitext(first_path)[1].lower()
+        if first_ext == ".epub":
+            return _extract_epub_cover(first_path)
+        elif first_ext == ".cbz":
+            return _extract_cbz_first_image(first_path)
+
+    return None, None
+
+
 # ── output format writers ──
 
 def _strip_html_tags(html_str):
@@ -1301,8 +1859,28 @@ def _chapters_to_content_list(chapters_data):
 
 
 def _write_epub(chapters_data, spine_items, toc, output_path, title, author,
-                dividers_list, book, log=print):
+                dividers_list, book, cover_data=None, cover_ext=None, log=print):
     """Write the merged book as EPUB (the original format)."""
+    # add cover image if we have one
+    if cover_data and cover_ext:
+        media_map = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".gif": "image/gif",
+            ".webp": "image/webp", ".bmp": "image/bmp",
+        }
+        media_type = media_map.get(cover_ext, "image/jpeg")
+        cover_fname = f"images/cover{cover_ext}"
+
+        # add the image item
+        cover_img = epub.EpubImage()
+        cover_img.file_name = cover_fname
+        cover_img.media_type = media_type
+        cover_img.set_content(cover_data)
+        book.add_item(cover_img)
+
+        # set cover metadata
+        book.set_cover(cover_fname, cover_data)
+
     book.toc = toc
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
@@ -1349,11 +1927,29 @@ def _write_txt(chapters_data, output_path, title, author, log=print):
         f.write(text_out)
 
 
-def _write_html(chapters_data, output_path, title, author, log=print):
+def _write_html(chapters_data, output_path, title, author,
+                cover_data=None, cover_ext=None, log=print):
     """Write merged content as a single HTML file."""
     content_list = _chapters_to_content_list(chapters_data)
 
     body_parts = []
+
+    # insert cover image as base64 if we have one
+    if cover_data and cover_ext:
+        import base64
+        media_map = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".gif": "image/gif",
+            ".webp": "image/webp", ".bmp": "image/bmp",
+        }
+        media_type = media_map.get(cover_ext, "image/jpeg")
+        b64 = base64.b64encode(cover_data).decode("ascii")
+        body_parts.append(
+            f'    <div style="text-align:center; margin-bottom:2em;">'
+            f'<img src="data:{media_type};base64,{b64}" '
+            f'alt="Cover" style="max-width:100%; max-height:80vh;"/></div>'
+        )
+
     for i, ch in enumerate(content_list):
         if i > 0:
             body_parts.append('    <hr style="margin: 2em 0;"/>')
@@ -1399,8 +1995,12 @@ def _write_html(chapters_data, output_path, title, author, log=print):
         f.write(html_out)
 
 
-def _write_pdf(chapters_data, output_path, title, author, log=print):
+def _write_pdf(chapters_data, output_path, title, author,
+               cover_data=None, cover_ext=None, log=print):
     """Write merged content as a PDF."""
+    if not HAS_FPDF2:
+        raise RuntimeError("PDF output needs fpdf2 — pip install fpdf2")
+
     content_list = _chapters_to_content_list(chapters_data)
 
     pdf = FPDF()
@@ -1419,6 +2019,29 @@ def _write_pdf(chapters_data, output_path, title, author, log=print):
         except (UnicodeEncodeError, UnicodeDecodeError):
             s = s.encode("ascii", errors="replace").decode("ascii")
         return s
+
+    # cover page if we have an image
+    if cover_data and cover_ext and HAS_PILLOW:
+        try:
+            img = Image.open(io.BytesIO(cover_data))
+            # save to a temp file because fpdf wants a path
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=cover_ext, delete=False) as tmp:
+                tmp.write(cover_data)
+                tmp_path = tmp.name
+            pdf.add_page()
+            # fit the image to the page
+            page_w = pdf.w - pdf.l_margin - pdf.r_margin
+            page_h = pdf.h - 30
+            img_w, img_h = img.size
+            ratio = min(page_w / img_w, page_h / img_h)
+            w = img_w * ratio
+            h = img_h * ratio
+            x = (pdf.w - w) / 2
+            pdf.image(tmp_path, x=x, y=15, w=w, h=h)
+            os.unlink(tmp_path)
+        except Exception:
+            pass  # skip cover if it fails
 
     # title page
     pdf.add_page()
@@ -1454,11 +2077,25 @@ def _write_pdf(chapters_data, output_path, title, author, log=print):
     pdf.output(output_path)
 
 
-def _write_docx(chapters_data, output_path, title, author, log=print):
+def _write_docx(chapters_data, output_path, title, author,
+                cover_data=None, cover_ext=None, log=print):
     """Write merged content as a DOCX file."""
+    if not HAS_DOCX:
+        raise RuntimeError("DOCX output needs python-docx — pip install python-docx")
+
     content_list = _chapters_to_content_list(chapters_data)
 
     doc = python_docx.Document()
+
+    # insert cover image if we have one
+    if cover_data and cover_ext:
+        try:
+            from docx.shared import Inches
+            img_stream = io.BytesIO(cover_data)
+            doc.add_picture(img_stream, width=Inches(5))
+            doc.add_page_break()
+        except Exception:
+            pass  # skip cover if it fails
 
     # title
     doc.add_heading(title, level=0)
@@ -1488,7 +2125,8 @@ def _write_docx(chapters_data, output_path, title, author, log=print):
 # ── main merge function ──
 
 def merge_files(files, output_path, title, author, dividers=True,
-                output_format="epub", log=print):
+                output_format="epub", cover_mode="none", cover_path="",
+                log=print):
     """
     The actual merge. Takes a list of (path, filename) tuples,
     builds the output in the requested format, writes it to output_path.
@@ -1498,6 +2136,16 @@ def merge_files(files, output_path, title, author, dividers=True,
 
     Returns a dict with stats or raises on fatal errors.
     """
+    # check if the requested output format is available
+    fmt = output_format.lower().strip()
+    if fmt == "pdf" and not HAS_FPDF2:
+        raise RuntimeError("PDF output needs fpdf2 — pip install fpdf2")
+    if fmt == "docx" and not HAS_DOCX:
+        raise RuntimeError("DOCX output needs python-docx — pip install python-docx")
+
+    # resolve cover image
+    cover_data, cover_ext = _get_cover_image_data(cover_mode, cover_path, files)
+
     # we always build chapters using the epub structures internally,
     # then convert to the target format at the end
     book = epub.EpubBook()
@@ -1518,6 +2166,20 @@ def merge_files(files, output_path, title, author, dividers=True,
         ext = os.path.splitext(fname)[1].lower()
         log(f"  [{i+1}/{len(files)}] {fname}")
 
+        # check if this format is available
+        if ext == ".pdf" and not HAS_PYPDF:
+            log(f"    \u26a0 PDF input needs pypdf — pip install pypdf")
+            continue
+        if ext == ".docx" and not HAS_DOCX:
+            log(f"    \u26a0 DOCX input needs python-docx — pip install python-docx")
+            continue
+        if ext == ".odt" and not HAS_ODFPY:
+            log(f"    \u26a0 ODT input needs odfpy — pip install odfpy")
+            continue
+        if ext == ".cbz" and not HAS_PILLOW:
+            log(f"    \u26a0 CBZ input needs Pillow — pip install Pillow")
+            continue
+
         if dividers and i > 0:
             d = _make_divider(fname, i)
             book.add_item(d)
@@ -1526,10 +2188,10 @@ def merge_files(files, output_path, title, author, dividers=True,
         if ext == ".epub":
             chapters, ch_count, err = _pull_epub_chapters(fpath, fname, book, ch_count)
             if err:
-                log(f"    ⚠ {err}")
+                log(f"    \u26a0 {err}")
                 continue
             if not chapters:
-                log(f"    ⚠ no chapters found")
+                log(f"    \u26a0 no chapters found")
                 continue
 
             for ch, _ in chapters:
@@ -1547,16 +2209,16 @@ def merge_files(files, output_path, title, author, dividers=True,
                 for ch, _ in chapters
             )
             total_words += wc
-            log(f"    ✓ {len(chapters)} chapter(s), ~{wc:,} words")
+            log(f"    \u2713 {len(chapters)} chapter(s), ~{wc:,} words")
             ok_count += 1
 
         elif ext == ".cbz":
             chapters, ch_count, err = _read_cbz(fpath, fname, book, ch_count)
             if err:
-                log(f"    ⚠ {err}")
+                log(f"    \u26a0 {err}")
                 continue
             if not chapters:
-                log(f"    ⚠ no images found")
+                log(f"    \u26a0 no images found")
                 continue
 
             for ch, _ in chapters:
@@ -1569,7 +2231,7 @@ def merge_files(files, output_path, title, author, dividers=True,
                 sec = os.path.splitext(fname)[0]
                 toc.append((epub.Section(sec), [ch for ch, _ in chapters]))
 
-            log(f"    ✓ {len(chapters)} page(s)")
+            log(f"    \u2713 {len(chapters)} page(s)")
             ok_count += 1
 
         else:
@@ -1587,12 +2249,12 @@ def merge_files(files, output_path, title, author, dividers=True,
             }
             reader = reader_map.get(ext)
             if not reader:
-                log(f"    ⚠ unsupported format: {ext}")
+                log(f"    \u26a0 unsupported format: {ext}")
                 continue
 
             result, ch_count, err = reader(fpath, fname, ch_count)
             if err or not result:
-                log(f"    ⚠ {err or 'empty file'}")
+                log(f"    \u26a0 {err or 'empty file'}")
                 continue
 
             ch, label, wc = result
@@ -1601,26 +2263,27 @@ def merge_files(files, output_path, title, author, dividers=True,
             toc.append(ch)
             all_chapters.append((ch, label))
             total_words += wc
-            log(f"    ✓ 1 chapter, ~{wc:,} words")
+            log(f"    \u2713 1 chapter, ~{wc:,} words")
             ok_count += 1
 
     if not spine_items:
-        raise RuntimeError("Nothing to merge — no chapters were produced.")
+        raise RuntimeError("Nothing to merge \u2014 no chapters were produced.")
 
     # write output in the requested format
-    fmt = output_format.lower().strip()
-
     if fmt == "epub":
         _write_epub(all_chapters, spine_items, toc, output_path, title, author,
-                     [], book, log)
+                     [], book, cover_data, cover_ext, log)
     elif fmt == "txt":
         _write_txt(all_chapters, output_path, title, author, log)
     elif fmt == "html":
-        _write_html(all_chapters, output_path, title, author, log)
+        _write_html(all_chapters, output_path, title, author,
+                     cover_data, cover_ext, log)
     elif fmt == "pdf":
-        _write_pdf(all_chapters, output_path, title, author, log)
+        _write_pdf(all_chapters, output_path, title, author,
+                    cover_data, cover_ext, log)
     elif fmt == "docx":
-        _write_docx(all_chapters, output_path, title, author, log)
+        _write_docx(all_chapters, output_path, title, author,
+                     cover_data, cover_ext, log)
     else:
         raise RuntimeError(f"Unknown output format: {fmt}")
 
@@ -1637,6 +2300,35 @@ def merge_files(files, output_path, title, author, dividers=True,
         "size": size_nice,
         "path": os.path.abspath(output_path),
     }
+
+
+# ──────────────────────────────────────────────────────────────
+# Format availability helpers — used by the GUI to show what's
+# available based on installed deps
+# ──────────────────────────────────────────────────────────────
+
+def _available_input_extensions():
+    """Return the set of input extensions that are actually usable."""
+    exts = {".epub", ".txt", ".html", ".htm", ".rtf", ".md", ".fb2"}
+    if HAS_PYPDF:
+        exts.add(".pdf")
+    if HAS_DOCX:
+        exts.add(".docx")
+    if HAS_ODFPY:
+        exts.add(".odt")
+    if HAS_PILLOW:
+        exts.add(".cbz")
+    return exts
+
+
+def _available_output_formats():
+    """Return list of output format strings that are actually usable."""
+    fmts = ["epub", "txt", "html"]
+    if HAS_FPDF2:
+        fmts.append("pdf")
+    if HAS_DOCX:
+        fmts.append("docx")
+    return fmts
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1740,8 +2432,8 @@ def launch_gui():
     root = tk.Tk()
     root.title("Simple eBook Merger v3.0")
     root.resizable(True, True)
-    root.geometry("720x820")
-    root.minsize(700, 600)
+    root.geometry("760x920")
+    root.minsize(720, 700)
 
     style = ttk.Style()
     style.theme_use("clam")
@@ -1796,6 +2488,10 @@ def launch_gui():
                          font=FONT)
         style.map("TCheckbutton", background=[("active", t["bg"])])
 
+        style.configure("TRadiobutton", background=t["bg"], foreground=t["fg"],
+                         font=FONT)
+        style.map("TRadiobutton", background=[("active", t["bg"])])
+
         style.configure("TEntry", fieldbackground=t["bg_entry"],
                          foreground=t["fg"], insertcolor=t["fg"],
                          font=FONT, padding=5)
@@ -1827,6 +2523,11 @@ def launch_gui():
                     w.tag_configure("warn", foreground=t["warn"])
                     w.tag_configure("err",  foreground=t["red"])
                     w.tag_configure("dim",  foreground=t["fg_dim"])
+                elif role == "preview":
+                    w.configure(bg=t["bg_mid"], fg=t["fg"])
+                elif role == "paste_text":
+                    w.configure(bg=t["bg_entry"], fg=t["fg"],
+                                insertbackground=t["fg"])
                 elif role == "statusbar":
                     w.configure(bg=t["bg_mid"])
             except Exception:
@@ -1841,9 +2542,41 @@ def launch_gui():
 
         _save_theme(name)
 
-    # ── layout: use grid for the outer frame so sections resize ──
-    outer = ttk.Frame(root, padding=(16, 10, 16, 0))
-    outer.pack(fill="both", expand=True)
+    # ── scrollable outer frame ──
+    canvas = tk.Canvas(root, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(root, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    outer = ttk.Frame(canvas, padding=(16, 10, 16, 0))
+    outer_window = canvas.create_window((0, 0), window=outer, anchor="nw")
+
+    def _on_frame_configure(event=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _on_canvas_configure(event):
+        canvas.itemconfig(outer_window, width=event.width)
+
+    outer.bind("<Configure>", _on_frame_configure)
+    canvas.bind("<Configure>", _on_canvas_configure)
+
+    # mouse wheel scrolling
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _on_mousewheel_linux(event):
+        if event.num == 4:
+            canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            canvas.yview_scroll(1, "units")
+
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    canvas.bind_all("<Button-4>", _on_mousewheel_linux)
+    canvas.bind_all("<Button-5>", _on_mousewheel_linux)
+
+    tk_widgets.append((canvas, "statusbar"))
 
     # ── theme bar (very top) ──
     theme_bar = ttk.Frame(outer)
@@ -1857,6 +2590,24 @@ def launch_gui():
                           command=lambda n=tname: _apply_theme(n))
         btn.pack(side="left", padx=(0, 4))
         theme_buttons[tname] = btn
+
+    # dep status — show which optional deps are missing
+    _missing_optional = []
+    if not HAS_PYPDF:
+        _missing_optional.append("pypdf")
+    if not HAS_DOCX:
+        _missing_optional.append("python-docx")
+    if not HAS_ODFPY:
+        _missing_optional.append("odfpy")
+    if not HAS_FPDF2:
+        _missing_optional.append("fpdf2")
+    if not HAS_PILLOW:
+        _missing_optional.append("Pillow")
+
+    if _missing_optional:
+        dep_note = "Optional deps not installed: " + ", ".join(_missing_optional)
+        ttk.Label(theme_bar, text=dep_note, style="Dim.TLabel").pack(
+            side="right", padx=(8, 0))
 
     # ── header ──
     ttk.Label(outer, text="Simple eBook Merger v3.0",
@@ -1886,6 +2637,8 @@ def launch_gui():
             "add_dividers": dividers_var.get(),
             "output_format": format_var.get().lower(),
             "sort_order": _get_sort_mode(),
+            "cover_mode": cover_mode_var.get(),
+            "cover_path": cover_path_var.get().strip(),
         }
 
     def _apply_profile(data):
@@ -1896,17 +2649,19 @@ def launch_gui():
         author_var.set(data.get("book_author", "Various Authors"))
         dividers_var.set(data.get("add_dividers", True))
         fmt = data.get("output_format", "epub").upper()
-        if fmt in ("EPUB", "TXT", "HTML", "PDF", "DOCX"):
+        if fmt in [f.upper() for f in _available_output_formats()]:
             format_var.set(fmt)
         srt = data.get("sort_order", "smart")
         if srt == "alpha":
             sort_var.set("Alphabetical (A-Z)")
         else:
             sort_var.set("Smart Order (Recommended)")
+        cover_mode_var.set(data.get("cover_mode", "none"))
+        cover_path_var.set(data.get("cover_path", ""))
         pname = data.get("name", "")
         if pname:
             profile_label_var.set(f"Profile: {pname}")
-            root.title(f"Simple eBook Merger v3.0 — {pname}")
+            root.title(f"Simple eBook Merger v3.0 \u2014 {pname}")
         _refresh_file_list()
 
     def _save_profile_dialog():
@@ -1921,7 +2676,7 @@ def launch_gui():
         settings = _gather_settings()
         path = save_profile(name, settings)
         profile_label_var.set(f"Profile: {name}")
-        root.title(f"Simple eBook Merger v3.0 — {name}")
+        root.title(f"Simple eBook Merger v3.0 \u2014 {name}")
         messagebox.showinfo("Saved", f"Profile \"{name}\" saved.")
 
     def _load_profile_dialog():
@@ -2062,15 +2817,176 @@ def launch_gui():
 
     ttk.Button(row1, text="Browse...", command=pick_folder).pack(side="right")
 
+    # ── file list + buttons row ──
+    file_btn_row = ttk.Frame(input_frame)
+    file_btn_row.pack(fill="x", pady=(0, 4))
+
+    # file finder / scan folder button
+    def _scan_folder_dialog():
+        """Open a folder picker, scan recursively, let user pick files."""
+        d = filedialog.askdirectory(title="Pick folder to scan recursively")
+        if not d:
+            return
+        found = find_ebook_files_recursive(d)
+        if not found:
+            messagebox.showinfo("Nothing Found",
+                "No supported ebook files found in that folder tree.")
+            return
+
+        t = _popup_colors()
+        win = tk.Toplevel(root)
+        win.title("Found Files")
+        win.configure(bg=t["bg"])
+        win.geometry("500x400")
+        win.transient(root)
+        win.grab_set()
+
+        ttk.Label(win, text=f"Found {len(found)} file(s) — select which to add:").pack(
+            anchor="w", padx=12, pady=(12, 6))
+
+        listbox = tk.Listbox(win, bg=t["bg_mid"], fg=t["fg"], font=FONT_SM,
+                              selectmode="extended",
+                              selectbackground=t["accent"],
+                              selectforeground="#fff",
+                              borderwidth=0, highlightthickness=1,
+                              highlightcolor=t["accent"])
+        listbox.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        for full, rel in found:
+            listbox.insert("end", f"  {rel}")
+
+        def _select_all():
+            listbox.select_set(0, "end")
+
+        def _do_add():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            for idx in sel:
+                full, rel = found[idx]
+                name = os.path.basename(full)
+                # add to our tracked files list
+                _add_individual_file(full, name)
+            win.destroy()
+
+        btn_row = ttk.Frame(win)
+        btn_row.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn_row, text="Add Selected", command=_do_add).pack(
+            side="right", padx=(6, 0))
+        ttk.Button(btn_row, text="Select All", command=_select_all).pack(
+            side="right", padx=(6, 0))
+        ttk.Button(btn_row, text="Cancel", command=win.destroy).pack(
+            side="right")
+
+    ttk.Button(file_btn_row, text="Scan Folder...",
+               command=_scan_folder_dialog).pack(side="left", padx=(0, 4))
+
+    # paste paths button
+    paste_visible = tk.BooleanVar(value=False)
+
+    def _toggle_paste():
+        if paste_visible.get():
+            paste_frame.pack_forget()
+            paste_visible.set(False)
+        else:
+            paste_frame.pack(fill="x", pady=(4, 4), after=file_btn_row)
+            paste_visible.set(True)
+
+    ttk.Button(file_btn_row, text="Paste Paths...",
+               command=_toggle_paste).pack(side="left", padx=(0, 4))
+
+    # paste paths text area (hidden by default)
+    paste_frame = ttk.Frame(input_frame)
+    paste_text = tk.Text(paste_frame, font=FONT_SM, height=4,
+                          wrap="word", borderwidth=1)
+    paste_text.pack(fill="x", side="left", expand=True)
+    tk_widgets.append((paste_text, "paste_text"))
+
+    def _do_paste_add():
+        """Add files from the paste text box."""
+        raw = paste_text.get("1.0", "end").strip()
+        if not raw:
+            return
+        added = 0
+        for line in raw.split("\n"):
+            line = line.strip().strip('"').strip("'")
+            if not line:
+                continue
+            if os.path.isfile(line):
+                ext = os.path.splitext(line)[1].lower()
+                if ext in ALLOWED_EXTENSIONS:
+                    _add_individual_file(line, os.path.basename(line))
+                    added += 1
+        paste_text.delete("1.0", "end")
+        if added == 0:
+            messagebox.showinfo("Nothing Added",
+                "No valid ebook file paths found in the pasted text.")
+
+    ttk.Button(paste_frame, text="Add", command=_do_paste_add).pack(
+        side="right", padx=(4, 0))
+
+    # ── individual files list (not folder-based) ──
+    # we track files from both the folder scanner and paste/scan features
+    _individual_files = []  # list of (path, name) tuples
+
+    def _add_individual_file(path, name):
+        """Add a file to the individual files list + refresh display."""
+        # don't add duplicates
+        for p, _ in _individual_files:
+            if os.path.abspath(p) == os.path.abspath(path):
+                return
+        _individual_files.append((path, name))
+        _refresh_file_list()
+
     # file preview inside the input section
     file_listbox = tk.Listbox(input_frame, font=FONT_SM,
-                               borderwidth=0, highlightthickness=0, height=10)
+                               borderwidth=0, highlightthickness=0, height=8)
     file_listbox.pack(fill="both", expand=True, pady=(0, 4))
     tk_widgets.append((file_listbox, "listbox"))
 
     file_count_var = tk.StringVar(value="No folder selected yet")
     ttk.Label(input_frame, textvariable=file_count_var,
               style="Dim.TLabel").pack(anchor="w")
+
+    # ── chapter preview panel ──
+    preview_frame = ttk.LabelFrame(input_frame, text="  Preview  ", padding=(6, 4))
+    preview_frame.pack(fill="x", pady=(4, 0))
+
+    preview_text = tk.Text(preview_frame, font=FONT_SM, wrap="word",
+                            borderwidth=0, highlightthickness=0,
+                            state="disabled", height=5)
+    preview_scroll = ttk.Scrollbar(preview_frame, orient="vertical",
+                                    command=preview_text.yview)
+    preview_text.configure(yscrollcommand=preview_scroll.set)
+    preview_scroll.pack(side="right", fill="y")
+    preview_text.pack(fill="both", expand=True)
+    tk_widgets.append((preview_text, "preview"))
+
+    # ── track current file list for the merge + preview ──
+    _current_files = []  # the files that will actually be merged
+
+    def _on_file_select(event=None):
+        """Update chapter preview when user clicks a file in the list."""
+        sel = file_listbox.curselection()
+        if not sel or not _current_files:
+            return
+        idx = sel[0]
+        if idx >= len(_current_files):
+            return
+        fpath, fname = _current_files[idx]
+
+        # run preview in a thread so we don't freeze the GUI
+        def _do_preview():
+            text = _preview_file_text(fpath)
+            def _update():
+                preview_text.configure(state="normal")
+                preview_text.delete("1.0", "end")
+                preview_text.insert("1.0", text)
+                preview_text.configure(state="disabled")
+            root.after(0, _update)
+
+        threading.Thread(target=_do_preview, daemon=True).start()
+
+    file_listbox.bind("<<ListboxSelect>>", _on_file_select)
 
     # ── output section ──
     output_frame = ttk.LabelFrame(outer, text="  Output  ", padding=(10, 6))
@@ -2110,10 +3026,11 @@ def launch_gui():
     meta_row.pack(fill="x", pady=(0, 2))
 
     ttk.Label(meta_row, text="Format:").pack(side="left")
+    avail_fmts = [f.upper() for f in _available_output_formats()]
     format_var = tk.StringVar(value="EPUB")
     format_combo = ttk.Combobox(
         meta_row, textvariable=format_var,
-        values=["EPUB", "TXT", "HTML", "PDF", "DOCX"],
+        values=avail_fmts,
         state="readonly", width=8,
     )
     format_combo.pack(side="left", padx=(8, 16))
@@ -2137,6 +3054,47 @@ def launch_gui():
     author_var = tk.StringVar(value="Various Authors")
     ttk.Entry(meta_row, textvariable=author_var).pack(
         side="left", fill="x", expand=True, padx=(8, 0))
+
+    # ── cover image section ──
+    cover_frame = ttk.LabelFrame(outer, text="  Cover Image  ", padding=(10, 6))
+    cover_frame.pack(fill="x", pady=(0, 10))
+
+    cover_mode_var = tk.StringVar(value="none")
+    cover_path_var = tk.StringVar(value="")
+
+    cover_opt_row = ttk.Frame(cover_frame)
+    cover_opt_row.pack(fill="x")
+
+    ttk.Radiobutton(cover_opt_row, text="None", variable=cover_mode_var,
+                     value="none").pack(side="left", padx=(0, 12))
+    ttk.Radiobutton(cover_opt_row, text="Auto (from first input)",
+                     variable=cover_mode_var, value="auto").pack(
+                         side="left", padx=(0, 12))
+    ttk.Radiobutton(cover_opt_row, text="Browse...", variable=cover_mode_var,
+                     value="browse").pack(side="left", padx=(0, 8))
+
+    cover_path_entry = ttk.Entry(cover_opt_row, textvariable=cover_path_var,
+                                  width=30)
+    cover_path_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+    def _pick_cover():
+        f = filedialog.askopenfilename(
+            title="Pick a cover image",
+            filetypes=[
+                ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
+                ("All files", "*.*"),
+            ],
+        )
+        if f:
+            cover_path_var.set(f)
+            cover_mode_var.set("browse")
+
+    ttk.Button(cover_opt_row, text="Pick...", command=_pick_cover).pack(
+        side="right")
+
+    if not HAS_PILLOW:
+        ttk.Label(cover_frame, text="(Cover for PDF output needs Pillow)",
+                  style="Dim.TLabel").pack(anchor="w", pady=(4, 0))
 
     # ── options section ──
     options_frame = ttk.LabelFrame(outer, text="  Options  ", padding=(10, 6))
@@ -2167,20 +3125,38 @@ def launch_gui():
         return "smart" if "Smart" in sort_var.get() else "alpha"
 
     def _refresh_file_list():
+        nonlocal _current_files
         file_listbox.delete(0, "end")
         folder = input_var.get().strip()
-        if not folder or not os.path.isdir(folder):
-            file_count_var.set("No folder selected yet")
-            return
-        mode = _get_sort_mode()
-        found, skipped, sort_summary = find_ebook_files(folder, sort_order=mode)
-        for _, name in found:
+
+        # gather files from folder + individual adds
+        combined = []
+        if folder and os.path.isdir(folder):
+            mode = _get_sort_mode()
+            found, skipped, sort_summary = find_ebook_files(folder, sort_order=mode)
+            combined.extend(found)
+
+        # add individual files that aren't already in the list
+        folder_paths = {os.path.abspath(p) for p, _ in combined}
+        for p, n in _individual_files:
+            if os.path.abspath(p) not in folder_paths:
+                combined.append((p, n))
+
+        _current_files = combined
+
+        for _, name in combined:
             ext = os.path.splitext(name)[1].lower()
             file_listbox.insert("end", f"  {name}   ({ext})")
-        note = f"{len(found)} supported file(s)"
-        if skipped:
-            note += f", {len(skipped)} skipped"
+
+        note = f"{len(combined)} file(s)"
+        if not combined and not folder:
+            note = "No folder selected yet"
         file_count_var.set(note)
+
+        # clear preview
+        preview_text.configure(state="normal")
+        preview_text.delete("1.0", "end")
+        preview_text.configure(state="disabled")
 
     # ── merge section ──
     merge_frame = ttk.LabelFrame(outer, text="  Merge  ", padding=(10, 8))
@@ -2197,13 +3173,113 @@ def launch_gui():
                             style="Accent.TButton")
     merge_btn.pack(side="right")
 
+    # ── history section ──
+    history_frame = ttk.LabelFrame(outer, text="  History  ", padding=(10, 6))
+    history_frame.pack(fill="x", pady=(0, 10))
+
+    history_listbox = tk.Listbox(history_frame, font=FONT_SM,
+                                  borderwidth=0, highlightthickness=0, height=5)
+    history_listbox.pack(fill="both", expand=True, pady=(0, 4))
+    tk_widgets.append((history_listbox, "listbox"))
+
+    history_btn_row = ttk.Frame(history_frame)
+    history_btn_row.pack(fill="x")
+
+    _history_entries = []
+
+    def _refresh_history():
+        nonlocal _history_entries
+        history_listbox.delete(0, "end")
+        _history_entries = _load_history()
+        # show last 20, newest first
+        for entry in reversed(_history_entries[-20:]):
+            ts = entry.get("timestamp", "?")
+            fmt = entry.get("output_format", "?").upper()
+            n_files = len(entry.get("input_files", []))
+            title = entry.get("title", "?")
+            history_listbox.insert("end",
+                f"  {ts}  |  {title}  |  {fmt}  |  {n_files} file(s)")
+
+    def _rerun_history():
+        """Reload settings from a selected history entry."""
+        sel = history_listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Select Entry",
+                "Click on a history entry first.")
+            return
+        # entries are displayed newest-first, but stored oldest-first
+        display_idx = sel[0]
+        entries = _history_entries[-20:]
+        actual_idx = len(entries) - 1 - display_idx
+        if actual_idx < 0 or actual_idx >= len(entries):
+            return
+        entry = entries[actual_idx]
+
+        # populate fields from the history entry
+        title_var.set(entry.get("title", "My Merged eBook"))
+        author_var.set(entry.get("author", "Various Authors"))
+        dividers_var.set(entry.get("dividers", True))
+        fmt = entry.get("output_format", "epub").upper()
+        if fmt in avail_fmts:
+            format_var.set(fmt)
+        output_var.set(entry.get("output_path", "merged_book.epub"))
+        srt = entry.get("sort_order", "smart")
+        if srt == "alpha":
+            sort_var.set("Alphabetical (A-Z)")
+        else:
+            sort_var.set("Smart Order (Recommended)")
+        cover_mode_var.set(entry.get("cover_mode", "none"))
+        cover_path_var.set(entry.get("cover_path", ""))
+
+        # try to reload the input files
+        _individual_files.clear()
+        input_paths = entry.get("input_paths", [])
+        input_names = entry.get("input_files", [])
+        for i, p in enumerate(input_paths):
+            if os.path.isfile(p):
+                n = input_names[i] if i < len(input_names) else os.path.basename(p)
+                _individual_files.append((p, n))
+
+        # clear the folder input since we're using individual files
+        input_var.set("")
+        _refresh_file_list()
+
+    def _undo_last():
+        """Delete the output file from the most recent merge."""
+        if not _history_entries:
+            messagebox.showinfo("No History", "No merge history yet.")
+            return
+        last = _history_entries[-1]
+        out_path = last.get("output_path", "")
+        if not out_path or not os.path.isfile(out_path):
+            messagebox.showinfo("File Not Found",
+                f"Output file doesn't exist:\n{out_path}")
+            return
+        if messagebox.askyesno("Undo Last Merge",
+                f"Delete this output file?\n\n{out_path}"):
+            try:
+                os.remove(out_path)
+                messagebox.showinfo("Done", "File deleted.")
+            except OSError as e:
+                messagebox.showerror("Error", f"Couldn't delete: {e}")
+
+    ttk.Button(history_btn_row, text="Re-run Selected",
+               command=_rerun_history).pack(side="left", padx=(0, 6))
+    ttk.Button(history_btn_row, text="Undo Last (Delete File)",
+               command=_undo_last).pack(side="left", padx=(0, 6))
+    ttk.Button(history_btn_row, text="Refresh",
+               command=_refresh_history).pack(side="right")
+
+    # load history on startup
+    _refresh_history()
+
     # ── log section ──
     log_frame = ttk.LabelFrame(outer, text="  Log  ", padding=(8, 6))
     log_frame.pack(fill="both", expand=True, pady=(0, 8))
 
     log_text = tk.Text(log_frame, font=FONT_LOG,
                         wrap="word", borderwidth=0, highlightthickness=0,
-                        state="disabled", height=12)
+                        state="disabled", height=10)
     log_scroll = ttk.Scrollbar(log_frame, orient="vertical",
                                 command=log_text.yview)
     log_text.configure(yscrollcommand=log_scroll.set)
@@ -2234,45 +3310,43 @@ def launch_gui():
 
     # ── merge action ──
     def do_merge():
-        folder = input_var.get().strip()
         out    = output_var.get().strip()
         ttl    = title_var.get().strip() or "Merged eBook"
         auth   = author_var.get().strip() or "Unknown"
         divs   = dividers_var.get()
         fmt    = format_var.get().lower()
+        cmode  = cover_mode_var.get()
+        cpath  = cover_path_var.get().strip()
 
         # clear old log
         log_text.configure(state="normal")
         log_text.delete("1.0", "end")
         log_text.configure(state="disabled")
 
-        if not folder or not os.path.isdir(folder):
-            messagebox.showerror("Oops", "Pick a valid input folder first.")
-            return
         if not out:
             messagebox.showerror("Oops", "Set an output file path.")
             return
 
-        mode = _get_sort_mode()
-        files, skipped, sort_summary = find_ebook_files(folder, sort_order=mode)
+        files = _current_files
         if not files:
-            exts = ", ".join(sorted(ALLOWED_EXTENSIONS))
-            messagebox.showwarning("Nothing to merge",
-                f"No supported files ({exts}) found in that folder.")
-            return
+            folder = input_var.get().strip()
+            if folder and os.path.isdir(folder):
+                mode = _get_sort_mode()
+                files, skipped, sort_summary = find_ebook_files(folder, sort_order=mode)
+            if not files:
+                exts = ", ".join(sorted(ALLOWED_EXTENSIONS))
+                messagebox.showwarning("Nothing to merge",
+                    f"No files to merge. Add files or pick a folder first.")
+                return
 
         # disable the button so you can't double-click
         merge_btn.configure(state="disabled")
         status_var.set("Merging...")
 
+        mode = _get_sort_mode()
         sort_label = "Smart order" if mode == "smart" else "Alphabetical"
-        write_log(f"  Sort: {sort_label} ({sort_summary})", "dim")
+        write_log(f"  Sort: {sort_label}", "dim")
         write_log("")
-
-        if skipped:
-            for s in skipped:
-                write_log(f"  skipped: {s}", "dim")
-            write_log("")
 
         def _run():
             try:
@@ -2280,16 +3354,24 @@ def launch_gui():
                     files, out, ttl, auth,
                     dividers=divs,
                     output_format=fmt,
+                    cover_mode=cmode,
+                    cover_path=cpath,
                     log=lambda m: root.after(0, write_log, m),
                 )
+
+                # save to history
+                _add_history_entry(files, out, fmt, ttl, auth, divs,
+                                   mode, cmode, cpath)
+
                 def _done():
                     write_log("")
                     write_log(f"  Done! {stats['files_merged']} file(s), "
                               f"{stats['chapters']} chapter(s), "
                               f"~{stats['words']:,} words, {stats['size']}", "ok")
-                    write_log(f"  Saved → {stats['path']}", "ok")
+                    write_log(f"  Saved \u2192 {stats['path']}", "ok")
                     status_var.set("Done!")
                     merge_btn.configure(state="normal")
+                    _refresh_history()
                 root.after(0, _done)
 
             except Exception as exc:
@@ -2318,13 +3400,31 @@ def run_terminal():
     print("  Simple eBook Merger v3.0")
     print("=" * 60 + "\n")
 
-    print("⚠  LEGAL REMINDER:")
+    print("\u26a0  LEGAL REMINDER:")
     print("   Personal use only. Only merge files you actually own.")
     print("   Don't distribute copyrighted material.")
     print("   I am not liable for ANYTHING. Not your files, not your")
     print("   computer, not your cat, not your existential dread.")
     print("   By running this you accept full responsibility and agree")
     print("   to the full disclaimer in the source code. Read it.\n")
+
+    # show dep status
+    _opt_deps = []
+    if not HAS_PYPDF:
+        _opt_deps.append("pypdf (PDF input)")
+    if not HAS_DOCX:
+        _opt_deps.append("python-docx (DOCX)")
+    if not HAS_ODFPY:
+        _opt_deps.append("odfpy (ODT)")
+    if not HAS_FPDF2:
+        _opt_deps.append("fpdf2 (PDF output)")
+    if not HAS_PILLOW:
+        _opt_deps.append("Pillow (CBZ + covers)")
+    if _opt_deps:
+        print("  Optional deps not installed:")
+        for d in _opt_deps:
+            print(f"    - {d}")
+        print()
 
     # ── handle --list-profiles ──
     if "--list-profiles" in sys.argv:
@@ -2341,12 +3441,12 @@ def run_terminal():
                     fmt = pdata.get("output_format", "?").upper()
                     inp = pdata.get("input_dir", "?")
                     updated = pdata.get("updated", "?")
-                    print(f"    • {pname}")
+                    print(f"    \u2022 {pname}")
                     print(f"      format: {fmt}  |  input: {inp}")
                     print(f"      last updated: {updated}")
                     print()
                 except (json.JSONDecodeError, OSError):
-                    print(f"    • {pname}  (couldn't read file)")
+                    print(f"    \u2022 {pname}  (couldn't read file)")
                     print()
         return
 
@@ -2354,7 +3454,7 @@ def run_terminal():
     if "--save-profile" in sys.argv:
         idx = sys.argv.index("--save-profile")
         if idx + 1 >= len(sys.argv):
-            print("  ✗ --save-profile needs a name.\n")
+            print("  \u2717 --save-profile needs a name.\n")
             print("  Example:  --save-profile \"My Fantasy Series\"\n")
             return
         prof_name = sys.argv[idx + 1]
@@ -2368,8 +3468,8 @@ def run_terminal():
             "sort_order": SORT_ORDER,
         }
         path = save_profile(prof_name, settings)
-        print(f"  ✓ Profile saved: \"{prof_name}\"")
-        print(f"    → {path}\n")
+        print(f"  \u2713 Profile saved: \"{prof_name}\"")
+        print(f"    \u2192 {path}\n")
         return
 
     # ── load profile if --profile was given ──
@@ -2384,14 +3484,14 @@ def run_terminal():
     if "--profile" in sys.argv:
         idx = sys.argv.index("--profile")
         if idx + 1 >= len(sys.argv):
-            print("  ✗ --profile needs a name.\n")
+            print("  \u2717 --profile needs a name.\n")
             print("  Example:  --profile \"My Fantasy Series\"")
             print("  See saved profiles with:  --list-profiles\n")
             return
         prof_name = sys.argv[idx + 1]
         pdata = load_profile(prof_name)
         if pdata is None:
-            print(f"  ✗ No profile found named \"{prof_name}\".\n")
+            print(f"  \u2717 No profile found named \"{prof_name}\".\n")
             print("  See saved profiles with:  --list-profiles\n")
             return
         input_dir = pdata.get("input_dir", input_dir)
@@ -2406,16 +3506,17 @@ def run_terminal():
     # check config
     problems = []
     if "PUT_YOUR_FOLDER" in input_dir or not input_dir.strip():
-        problems.append("INPUT_DIR isn't set — edit the CONFIG section at the top of the script.")
+        problems.append("INPUT_DIR isn't set \u2014 edit the CONFIG section at the top of the script.")
     elif not os.path.isdir(input_dir):
         problems.append(f"INPUT_DIR doesn't exist: {input_dir}")
     if not output_file.strip():
         problems.append("OUTPUT_FILE isn't set.")
 
     fmt = output_format.lower().strip()
-    if fmt not in OUTPUT_FORMATS:
-        problems.append(f"OUTPUT_FORMAT '{output_format}' isn't valid. "
-                        f"Use one of: {', '.join(OUTPUT_FORMATS)}")
+    if fmt not in _available_output_formats():
+        avail = ", ".join(_available_output_formats())
+        problems.append(f"OUTPUT_FORMAT '{output_format}' isn't available. "
+                        f"Available: {avail}")
 
     sort_mode = sort_order.lower().strip() if isinstance(sort_order, str) else "smart"
     if sort_mode not in ("smart", "alpha"):
@@ -2427,33 +3528,37 @@ def run_terminal():
         print("  Setup incomplete:")
         print("=" * 60)
         for p in problems:
-            print(f"\n  ✗ {p}")
+            print(f"\n  \u2717 {p}")
         print("\nOpen this script in a text editor and fill in the CONFIG section.\n")
         return
 
-    print(f"→ Scanning: {input_dir}\n")
+    print(f"\u2192 Scanning: {input_dir}\n")
     files, skipped, sort_summary = find_ebook_files(input_dir, sort_order=sort_mode)
 
     for s in skipped:
-        print(f"  ⚠ skipping: {s}")
+        print(f"  \u26a0 skipping: {s}")
 
     if not files:
-        exts = ", ".join(sorted(ALLOWED_EXTENSIONS))
+        exts = ", ".join(sorted(_available_input_extensions()))
         print(f"\nNo supported files found.")
-        print(f"  Supported: {exts}")
+        print(f"  Available formats: {exts}")
         print("  Double-check INPUT_DIR.\n")
         return
 
     sort_label = "Smart order" if sort_mode == "smart" else "Alphabetical"
-    print(f"  Found {len(files)} file(s) — {sort_label} ({sort_summary}):")
+    print(f"  Found {len(files)} file(s) \u2014 {sort_label} ({sort_summary}):")
     for _, name in files:
-        print(f"    • {name}")
+        print(f"    \u2022 {name}")
 
-    print(f"\n→ Merging into {fmt.upper()} format...\n")
+    print(f"\n\u2192 Merging into {fmt.upper()} format...\n")
 
     try:
         stats = merge_files(files, output_file, book_title, book_author,
                             dividers=add_dividers, output_format=fmt)
+
+        # save to history
+        _add_history_entry(files, output_file, fmt, book_title, book_author,
+                           add_dividers, sort_mode)
 
         print(f"\n" + "=" * 60)
         print(f"  Files merged   : {stats['files_merged']}")
@@ -2462,13 +3567,13 @@ def run_terminal():
         print(f"  Output size    : {stats['size']}")
         print(f"  Output format  : {fmt.upper()}")
         print("=" * 60)
-        print(f"\n✓ Done! Saved to:\n  {stats['path']}\n")
+        print(f"\n\u2713 Done! Saved to:\n  {stats['path']}\n")
 
     except PermissionError:
         print(f"\nERROR: Can't write to {output_file}")
         print("  Maybe it's open in another program?\n")
     except RuntimeError as e:
-        print(f"\n  ✗ {e}\n")
+        print(f"\n  \u2717 {e}\n")
     except Exception as e:
         print(f"\nSomething went wrong: {e}")
         raise
@@ -2489,6 +3594,6 @@ if __name__ == "__main__":
             launch_gui()
         except ImportError:
             # tkinter not installed (some minimal linux setups)
-            print("\n  tkinter isn't available — falling back to terminal mode.")
+            print("\n  tkinter isn't available \u2014 falling back to terminal mode.")
             print("  (install it with: sudo apt install python3-tk)\n")
             run_terminal()

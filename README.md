@@ -8,17 +8,55 @@ Supports **EPUB**, **TXT**, **HTML**, **PDF**, **DOCX**, **RTF**, **Markdown**, 
 
 ================================================================================
 
+## Screenshots
+
+### Dark Theme (default)
+![Dark Theme](screenshots/01_dark_theme.png)
+
+### Light Theme
+![Light Theme](screenshots/02_light_theme.png)
+
+### All Themes
+Five built-in themes — pick whatever works for your eyes. Switches instantly and remembers your choice.
+
+| Midnight | Forest | Sunset |
+|---|---|---|
+| ![Midnight](screenshots/03_midnight_theme.png) | ![Forest](screenshots/04_forest_theme.png) | ![Sunset](screenshots/05_sunset_theme.png) |
+
+### Merge, History & Log
+![Bottom sections](screenshots/07_bottom_sections.png)
+
+================================================================================
+
 ## Requirements
 
 - **Python 3.8+** — grab it from https://python.org/downloads
   - During install, check "Add Python to PATH" (important!)
 - **tkinter** — ships with Python on Windows and Mac. Linux users might need `sudo apt install python3-tk`.
 
-Install the Python dependencies (one time):
+**Required** (must install):
 
 ```
-pip install ebooklib beautifulsoup4 lxml pypdf python-docx striprtf markdown odfpy fpdf2 Pillow
+pip install ebooklib beautifulsoup4 lxml
 ```
+
+**Optional** (install whichever you need — the tool tells you what's missing):
+
+```
+pip install pypdf          # PDF input support
+pip install python-docx    # DOCX input/output support
+pip install odfpy          # ODT input support
+pip install fpdf2          # PDF output support
+pip install Pillow         # CBZ (comic book) input + cover images
+```
+
+Or just install everything at once:
+
+```
+pip install ebooklib beautifulsoup4 lxml pypdf python-docx odfpy fpdf2 Pillow
+```
+
+RTF and Markdown support is built in — no extra installs needed.
 
 ================================================================================
 
@@ -32,9 +70,15 @@ Double-click `ebook_merger.py` or run:
 python ebook_merger.py
 ```
 
-A window opens. Pick your input folder, choose your output format, set a title/author, hit **Merge**. Done.
+A window opens. Here's the rundown:
 
-The GUI shows you which files it found, a live log as it processes, and a summary when it's finished. There's a dropdown to pick your output format (EPUB, TXT, HTML, PDF, DOCX) — changing it auto-updates the file extension.
+1. **Pick your input folder** — click Browse or use Scan Folder to dig through subdirectories
+2. **Preview chapters** — click any file in the list to see the first few lines in the Preview panel
+3. **Set your output** — pick format, filename, title, author
+4. **Optionally add a cover image** — pick one manually, or let it auto-pull from your first EPUB/CBZ
+5. **Hit Merge** — done
+
+The GUI shows a live log as it works. When it's finished you get a summary with file size and chapter count.
 
 ### Option B — Terminal / headless
 
@@ -56,6 +100,54 @@ OUTPUT_FORMAT = "epub"
 ```
 
 Then just run it.
+
+================================================================================
+
+## Features
+
+### File Input
+- **Folder browser** — pick a folder and it grabs every supported file inside
+- **Scan Folder** — recursively search through subfolders, then pick which files to add
+- **Paste Paths** — paste a list of file paths (one per line) to quick-add files from anywhere on your system
+
+### Cover Image
+Set a cover for your merged book:
+- **None** — skip the cover
+- **Auto** — pulls the cover from your first EPUB, or the first image from a CBZ
+- **Browse** — pick any image file (PNG, JPG, BMP, GIF, WEBP)
+
+Works with EPUB, PDF, DOCX, and HTML output. (TXT doesn't support images, obviously.)
+
+### Chapter Preview
+Click any file in the list and the Preview panel shows the first ~500 characters. Handy for checking if your files are in the right order before you merge.
+
+### Smart Chapter Ordering
+Pick how files get sorted before merging:
+- **Smart Order** (default) — auto-detects numbered prefixes, roman numerals, series patterns, dates
+- **Alphabetical** — plain A-Z by filename
+- **Natural Sort** — handles numbers in filenames correctly (chapter2 before chapter10)
+- **None** — whatever order the OS gives them
+
+### Profiles
+Save your merge settings so you don't have to reconfigure everything for recurring jobs.
+
+GUI has Save/Load/Delete buttons. From the terminal:
+
+```
+python ebook_merger.py --save-profile "My Series"
+python ebook_merger.py --profile "My Series"
+python ebook_merger.py --list-profiles
+```
+
+Profiles are stored as JSON in `~/.ebook_merger/profiles/`.
+
+### Merge History
+Every merge gets logged to `~/.ebook_merger/history.json`. The History section in the GUI shows your last 20 merges. You can:
+- **Re-run** a previous merge with the same settings
+- **Undo** the last merge (deletes the output file, asks first)
+
+### Themes
+Five color themes: **Dark**, **Light**, **Midnight**, **Forest**, **Sunset**. Switch from the buttons at the top of the window. Your pick is remembered between sessions.
 
 ================================================================================
 
@@ -86,15 +178,18 @@ Anything else in the folder gets skipped automatically — it won't break anythi
 | PDF | .pdf | Basic formatted PDF document |
 | Word (DOCX) | .docx | Word document with chapter headings |
 
+Some output formats need optional dependencies. The GUI grays out anything that's not available and tells you what to install.
+
 ================================================================================
 
 ## Tips
 
-- **Control the merge order** by naming your files with number prefixes: `01_prologue.epub`, `02_chapter1.epub`, `03_chapter2.txt`, etc. Files are merged alphabetically.
+- **Control the merge order** by naming your files with number prefixes: `01_prologue.epub`, `02_chapter1.epub`, `03_chapter2.txt`, etc. Or use Smart Order and let the tool figure it out.
 - **Divider pages** are inserted between each source file by default, so you can tell where one ends and the next starts. You can turn this off in the GUI (uncheck the box) or by setting `ADD_DIVIDERS = False` in the config.
 - **Images** from EPUB and CBZ files carry over into the merged output.
 - **Table of contents** is auto-generated. Multi-chapter EPUBs get nested entries.
 - The default output is **EPUB 3**, which works with pretty much everything: Calibre, Apple Books, Kobo, Rockbox, Kindle (via Send to Kindle or Calibre conversion), you name it.
+- **Optional deps are optional** — you only need `ebooklib`, `beautifulsoup4`, and `lxml` to run the tool. Everything else adds support for specific formats. The GUI tells you what's missing.
 
 ================================================================================
 
