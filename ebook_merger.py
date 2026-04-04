@@ -325,6 +325,10 @@ ADD_DIVIDERS = True
 # Output format: "epub", "txt", "html", "pdf", "docx"
 OUTPUT_FORMAT = "epub"
 
+# Sort order: "smart" (detects numbering, chapters, roman numerals, dates)
+#             "alpha" (plain alphabetical A-Z)
+SORT_ORDER = "smart"
+
 # ══════════════════════════════════════════════════════════════
 # END OF CONFIG
 # ══════════════════════════════════════════════════════════════
@@ -476,14 +480,155 @@ def _embed_watermark_docx(doc, wm):
 
 
 # ──────────────────────────────────────────────────────────────
+# Smart file ordering
+# ──────────────────────────────────────────────────────────────
+
+# Roman numeral lookup — covers I through L which is plenty for chapters
+_ROMAN_MAP = {
+    "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5,
+    "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10,
+    "XI": 11, "XII": 12, "XIII": 13, "XIV": 14, "XV": 15,
+    "XVI": 16, "XVII": 17, "XVIII": 18, "XIX": 19, "XX": 20,
+    "XXI": 21, "XXII": 22, "XXIII": 23, "XXIV": 24, "XXV": 25,
+    "XXVI": 26, "XXVII": 27, "XXVIII": 28, "XXIX": 29, "XXX": 30,
+    "XXXI": 31, "XXXII": 32, "XXXIII": 33, "XXXIV": 34, "XXXV": 35,
+    "XXXVI": 36, "XXXVII": 37, "XXXVIII": 38, "XXXIX": 39, "XL": 40,
+    "XLI": 41, "XLII": 42, "XLIII": 43, "XLIV": 44, "XLV": 45,
+    "XLVI": 46, "XLVII": 47, "XLVIII": 48, "XLIX": 49, "L": 50,
+}
+
+# Valid roman numeral characters (for quick rejection)
+_ROMAN_CHARS = set("IVXLCDM")
+
+# Patterns checked in priority order
+_PAT_LEADING_NUM = re.compile(r"^(\d+)")
+_PAT_CHAPTER_NUM = re.compile(r"(?:chapter|ch|part|section|sect|episode|ep)[\s._-]*(\d+)", re.I)
+_PAT_SERIES_NUM = re.compile(r"(?:book|bk|vol|volume|tome)[\s._-]*(\d+)", re.I)
+_PAT_ROMAN = re.compile(
+    r"(?:chapter|ch|part|section|sect|episode|ep|book|bk|vol|volume|tome)"
+    r"[\s._-]*([IVXLCDM]+)(?:[\s._\-\)]|$)", re.I
+)
+_PAT_DATE_YMD = re.compile(r"(\d{4})[\s._-](\d{1,2})[\s._-](\d{1,2})")
+_PAT_DATE_MDY = re.compile(r"(\d{1,2})[\s._-](\d{1,2})[\s._-](\d{4})")
+
+# For natural sort fallback: split text into numeric and non-numeric chunks
+_PAT_NATURAL = re.compile(r"(\d+)")
+
+
+def _roman_to_int(s):
+    """Convert a roman numeral string to int, or None if not valid."""
+    upper = s.upper()
+    if not upper or not all(c in _ROMAN_CHARS for c in upper):
+        return None
+    return _ROMAN_MAP.get(upper)
+
+
+def _extract_sort_key(filename):
+    """
+    Figure out the best sort key for a filename.
+    Returns (priority, numeric_key, natural_key, method_name).
+
+    Lower priority = checked first. If a pattern matches we use its
+    numeric_key. natural_key is the fallback for tiebreaking.
+    """
+    stem = os.path.splitext(filename)[0]
+
+    # 1) Leading number prefix: "01_chapter", "2 - intro", "04.story"
+    m = _PAT_LEADING_NUM.match(stem)
+    if m:
+        return (0, int(m.group(1)), [], "numbered prefix")
+
+    # 2) Chapter/Part/Section number: "Chapter 3", "part_04", "ep12"
+    m = _PAT_CHAPTER_NUM.search(stem)
+    if m:
+        return (1, int(m.group(1)), [], "chapter/part number")
+
+    # 3) Series patterns: "Book 1", "Vol 2", "Volume 03"
+    m = _PAT_SERIES_NUM.search(stem)
+    if m:
+        return (2, int(m.group(1)), [], "series/volume number")
+
+    # 4) Roman numerals after keywords: "Chapter_IV", "Part_II"
+    m = _PAT_ROMAN.search(stem)
+    if m:
+        val = _roman_to_int(m.group(1))
+        if val is not None:
+            return (3, val, [], "roman numeral")
+
+    # 5) Date-based: "2024-01-15_notes" or "01-15-2024_notes"
+    m = _PAT_DATE_YMD.search(stem)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1900 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
+            return (4, y * 10000 + mo * 100 + d, [], "date (YYYY-MM-DD)")
+
+    m = _PAT_DATE_MDY.search(stem)
+    if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1900 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
+            return (4, y * 10000 + mo * 100 + d, [], "date (MM-DD-YYYY)")
+
+    # 6) Natural sort fallback: split on numbers so "file2" < "file10"
+    chunks = _PAT_NATURAL.split(stem.lower())
+    natural = []
+    for chunk in chunks:
+        if chunk.isdigit():
+            natural.append((0, int(chunk)))
+        else:
+            natural.append((1, chunk))
+    return (5, 0, natural, "natural sort")
+
+
+def smart_sort_files(file_list):
+    """
+    Takes a list of (path, filename) tuples and returns them in smart
+    order. Detects numbered prefixes, chapter/part numbers, roman
+    numerals, series patterns, dates, and falls back to natural sort.
+
+    Returns (sorted_list, method_summary) where method_summary is a
+    short string describing what sorting method(s) were detected.
+    """
+    if not file_list:
+        return [], "nothing to sort"
+
+    # Build sort keys for each file
+    keyed = []
+    methods_seen = set()
+    for path, name in file_list:
+        priority, num_key, natural_key, method = _extract_sort_key(name)
+        methods_seen.add(method)
+        # Sort by: priority bucket, then numeric key, then natural key,
+        # then original filename as final tiebreak
+        keyed.append((priority, num_key, natural_key, name.lower(), path, name))
+
+    keyed.sort()
+
+    sorted_list = [(item[4], item[5]) for item in keyed]
+
+    # Summarize what we detected
+    if len(methods_seen) == 1:
+        summary = f"all files sorted by {next(iter(methods_seen))}"
+    else:
+        # list methods in a sensible order
+        ordered = []
+        for m in ["numbered prefix", "chapter/part number", "series/volume number",
+                   "roman numeral", "date (YYYY-MM-DD)", "date (MM-DD-YYYY)", "natural sort"]:
+            if m in methods_seen:
+                ordered.append(m)
+        summary = "mixed patterns: " + ", ".join(ordered)
+
+    return sorted_list, summary
+
+
+# ──────────────────────────────────────────────────────────────
 # Core merge logic (shared by GUI and terminal mode)
 # ──────────────────────────────────────────────────────────────
 
-def find_ebook_files(folder):
-    """Grab every supported file from a folder, sorted by name."""
+def find_ebook_files(folder, sort_order="smart"):
+    """Grab every supported file from a folder, sorted by name or smart order."""
     hits = []
     skipped = []
-    for name in sorted(os.listdir(folder)):
+    for name in os.listdir(folder):
         full = os.path.join(folder, name)
         if not os.path.isfile(full):
             continue
@@ -492,7 +637,14 @@ def find_ebook_files(folder):
             hits.append((full, name))
         else:
             skipped.append(name)
-    return hits, skipped
+
+    if sort_order == "smart":
+        hits, sort_summary = smart_sort_files(hits)
+    else:
+        hits.sort(key=lambda x: x[1].lower())
+        sort_summary = "alphabetical (A-Z)"
+
+    return hits, skipped, sort_summary
 
 
 def _uid(prefix="item"):
@@ -1564,11 +1716,28 @@ def launch_gui():
     # ── dividers checkbox ──
     dividers_var = tk.BooleanVar(value=True)
     ttk.Checkbutton(outer, text="Insert divider pages between files",
-                     variable=dividers_var).pack(anchor="w", pady=(0, 10))
+                     variable=dividers_var).pack(anchor="w", pady=(0, 8))
+
+    # ── sort order row ──
+    row_sort = ttk.Frame(outer)
+    row_sort.pack(fill="x", pady=(0, 10))
+    ttk.Label(row_sort, text="Sort order:").pack(side="left")
+
+    sort_var = tk.StringVar(value="Smart Order (Recommended)")
+    sort_combo = ttk.Combobox(
+        row_sort, textvariable=sort_var,
+        values=["Smart Order (Recommended)", "Alphabetical (A-Z)"],
+        state="readonly", width=28,
+    )
+    sort_combo.pack(side="left", padx=(8, 0))
+
+    def _on_sort_change(event=None):
+        _refresh_file_list()
+
+    sort_combo.bind("<<ComboboxSelected>>", _on_sort_change)
 
     # ── file preview ──
-    preview_frame = ttk.LabelFrame(outer, text=" Files to merge (alphabetical order) ",
-                                    padding=8)
+    preview_frame = ttk.LabelFrame(outer, text=" Files to merge ", padding=8)
     preview_frame.pack(fill="both", expand=False, pady=(0, 8))
     preview_frame.configure(height=120)
 
@@ -1580,13 +1749,17 @@ def launch_gui():
     file_count_var = tk.StringVar(value="No folder selected yet")
     ttk.Label(outer, textvariable=file_count_var, style="Dim.TLabel").pack(anchor="w", pady=(0, 6))
 
+    def _get_sort_mode():
+        return "smart" if "Smart" in sort_var.get() else "alpha"
+
     def _refresh_file_list():
         file_listbox.delete(0, "end")
         folder = input_var.get().strip()
         if not folder or not os.path.isdir(folder):
             file_count_var.set("No folder selected yet")
             return
-        found, skipped = find_ebook_files(folder)
+        mode = _get_sort_mode()
+        found, skipped, sort_summary = find_ebook_files(folder, sort_order=mode)
         for _, name in found:
             ext = os.path.splitext(name)[1].lower()
             file_listbox.insert("end", f"  {name}   ({ext})")
@@ -1653,7 +1826,8 @@ def launch_gui():
             messagebox.showerror("Oops", "Set an output file path.")
             return
 
-        files, skipped = find_ebook_files(folder)
+        mode = _get_sort_mode()
+        files, skipped, sort_summary = find_ebook_files(folder, sort_order=mode)
         if not files:
             exts = ", ".join(sorted(ALLOWED_EXTENSIONS))
             messagebox.showwarning("Nothing to merge",
@@ -1663,6 +1837,10 @@ def launch_gui():
         # disable the button so you can't double-click
         merge_btn.configure(state="disabled")
         status_var.set("Merging...")
+
+        sort_label = "Smart order" if mode == "smart" else "Alphabetical"
+        write_log(f"  Sort: {sort_label} ({sort_summary})", "dim")
+        write_log("")
 
         if skipped:
             for s in skipped:
@@ -1735,6 +1913,11 @@ def run_terminal():
         problems.append(f"OUTPUT_FORMAT '{OUTPUT_FORMAT}' isn't valid. "
                         f"Use one of: {', '.join(OUTPUT_FORMATS)}")
 
+    sort_mode = SORT_ORDER.lower().strip() if isinstance(SORT_ORDER, str) else "smart"
+    if sort_mode not in ("smart", "alpha"):
+        problems.append(f"SORT_ORDER '{SORT_ORDER}' isn't valid. Use 'smart' or 'alpha'.")
+        sort_mode = "smart"
+
     if problems:
         print("=" * 60)
         print("  Setup incomplete:")
@@ -1745,7 +1928,7 @@ def run_terminal():
         return
 
     print(f"→ Scanning: {INPUT_DIR}\n")
-    files, skipped = find_ebook_files(INPUT_DIR)
+    files, skipped, sort_summary = find_ebook_files(INPUT_DIR, sort_order=sort_mode)
 
     for s in skipped:
         print(f"  ⚠ skipping: {s}")
@@ -1757,7 +1940,8 @@ def run_terminal():
         print("  Double-check INPUT_DIR.\n")
         return
 
-    print(f"  Found {len(files)} file(s):")
+    sort_label = "Smart order" if sort_mode == "smart" else "Alphabetical"
+    print(f"  Found {len(files)} file(s) — {sort_label} ({sort_summary}):")
     for _, name in files:
         print(f"    • {name}")
 
