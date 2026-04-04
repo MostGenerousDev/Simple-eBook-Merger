@@ -24,6 +24,19 @@ HOW TO RUN
   In terminal mode you'll need to edit the CONFIG section below
   before running. The GUI handles everything through the window.
 
+PROFILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Save your merge settings so you don't have to reconfigure
+  everything for recurring jobs. The GUI has Save/Load/Delete
+  buttons in the Profiles section at the top.
+
+  From the terminal:
+    python ebook_merger.py --save-profile "My Series"
+    python ebook_merger.py --profile "My Series"
+    python ebook_merger.py --list-profiles
+
+  Profiles are stored as JSON in ~/.ebook_merger/profiles/
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 REQUIREMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -230,6 +243,7 @@ import os
 import sys
 import uuid
 import re
+import json
 import html as html_module
 import threading
 import xml.etree.ElementTree as ET
@@ -346,6 +360,108 @@ OUTPUT_EXT_MAP = {
     "pdf": ".pdf",
     "docx": ".docx",
 }
+
+# ── profile keys (the fields we save/load) ──
+_PROFILE_KEYS = [
+    "name", "input_dir", "output_file", "book_title", "book_author",
+    "add_dividers", "output_format", "sort_order", "created", "updated",
+]
+
+
+def _profiles_dir():
+    """
+    Returns the path to the profiles folder, creating it if needed.
+    Uses ~/.ebook_merger/profiles/ so profiles survive across script updates.
+    """
+    base = os.path.join(os.path.expanduser("~"), ".ebook_merger", "profiles")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _profile_path(name):
+    """Turns a profile name into a safe filename."""
+    safe = re.sub(r'[^\w\s\-]', '', name).strip().replace(' ', '_')
+    if not safe:
+        safe = "profile"
+    return os.path.join(_profiles_dir(), safe + ".json")
+
+
+def save_profile(name, settings):
+    """
+    Saves a merge profile to disk.  *settings* should be a dict with
+    keys like input_dir, output_file, book_title, etc.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    path = _profile_path(name)
+
+    # if the file already exists, keep the original creation date
+    created = today
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                old = json.load(fh)
+            created = old.get("created", today)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    data = {
+        "name": name,
+        "input_dir": settings.get("input_dir", ""),
+        "output_file": settings.get("output_file", ""),
+        "book_title": settings.get("book_title", "My Merged eBook"),
+        "book_author": settings.get("book_author", "Various Authors"),
+        "add_dividers": bool(settings.get("add_dividers", True)),
+        "output_format": settings.get("output_format", "epub").lower(),
+        "sort_order": settings.get("sort_order", "smart").lower(),
+        "created": created,
+        "updated": today,
+    }
+
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+
+    return path
+
+
+def load_profile(name):
+    """
+    Loads a saved profile by name.  Returns the dict, or None if
+    the profile doesn't exist.
+    """
+    path = _profile_path(name)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def delete_profile(name):
+    """Deletes a saved profile.  Returns True if it existed."""
+    path = _profile_path(name)
+    if os.path.isfile(path):
+        os.remove(path)
+        return True
+    return False
+
+
+def list_profiles():
+    """Returns a list of (name, path) tuples for every saved profile."""
+    pdir = _profiles_dir()
+    results = []
+    for fname in sorted(os.listdir(pdir)):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(pdir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            results.append((data.get("name", fname[:-5]), fpath))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return results
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1595,6 +1711,171 @@ def launch_gui():
     ttk.Label(outer, text="Toss your files in a folder, pick it, hit merge.",
               style="Dim.TLabel").pack(anchor="w", pady=(0, 14))
 
+    # ── profiles toolbar ──
+    prof_frame = ttk.LabelFrame(outer, text=" Profiles ", padding=(8, 4))
+    prof_frame.pack(fill="x", pady=(0, 12))
+
+    profile_label_var = tk.StringVar(value="No profile loaded")
+
+    prof_btn_row = ttk.Frame(prof_frame)
+    prof_btn_row.pack(fill="x")
+
+    ttk.Label(prof_btn_row, textvariable=profile_label_var,
+              style="Dim.TLabel").pack(side="left", padx=(0, 12))
+
+    def _gather_settings():
+        """Collect current GUI fields into a dict."""
+        return {
+            "input_dir": input_var.get().strip(),
+            "output_file": output_var.get().strip(),
+            "book_title": title_var.get().strip(),
+            "book_author": author_var.get().strip(),
+            "add_dividers": dividers_var.get(),
+            "output_format": format_var.get().lower(),
+            "sort_order": _get_sort_mode(),
+        }
+
+    def _apply_profile(data):
+        """Push a profile dict into the GUI fields."""
+        input_var.set(data.get("input_dir", ""))
+        output_var.set(data.get("output_file", ""))
+        title_var.set(data.get("book_title", "My Merged eBook"))
+        author_var.set(data.get("book_author", "Various Authors"))
+        dividers_var.set(data.get("add_dividers", True))
+        fmt = data.get("output_format", "epub").upper()
+        if fmt in ("EPUB", "TXT", "HTML", "PDF", "DOCX"):
+            format_var.set(fmt)
+        srt = data.get("sort_order", "smart")
+        if srt == "alpha":
+            sort_var.set("Alphabetical (A-Z)")
+        else:
+            sort_var.set("Smart Order (Recommended)")
+        pname = data.get("name", "")
+        if pname:
+            profile_label_var.set(f"Profile: {pname}")
+            root.title(f"Simple eBook Merger v3.0 — {pname}")
+        _refresh_file_list()
+
+    def _save_profile_dialog():
+        name = tk.simpledialog.askstring(
+            "Save Profile",
+            "Give this profile a name:",
+            parent=root,
+        )
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        settings = _gather_settings()
+        path = save_profile(name, settings)
+        profile_label_var.set(f"Profile: {name}")
+        root.title(f"Simple eBook Merger v3.0 — {name}")
+        messagebox.showinfo("Saved", f"Profile \"{name}\" saved.")
+
+    def _load_profile_dialog():
+        profs = list_profiles()
+        if not profs:
+            messagebox.showinfo("No Profiles",
+                "No saved profiles yet.\nUse \"Save Profile\" to create one.")
+            return
+        names = [p[0] for p in profs]
+        _pick_profile_window(names)
+
+    def _pick_profile_window(names):
+        """Small popup to pick a profile from a list."""
+        win = tk.Toplevel(root)
+        win.title("Load Profile")
+        win.configure(bg=BG)
+        win.geometry("340x300")
+        win.transient(root)
+        win.grab_set()
+
+        ttk.Label(win, text="Pick a profile to load:").pack(
+            anchor="w", padx=12, pady=(12, 6))
+
+        listbox = tk.Listbox(win, bg=BG_MID, fg=FG, font=FONT_SM,
+                              selectbackground=ACCENT, selectforeground="#fff",
+                              borderwidth=0, highlightthickness=1,
+                              highlightcolor=ACCENT)
+        listbox.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        for n in names:
+            listbox.insert("end", f"  {n}")
+
+        def _do_load():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            chosen = names[sel[0]]
+            data = load_profile(chosen)
+            if data:
+                _apply_profile(data)
+            win.destroy()
+
+        btn_row = ttk.Frame(win)
+        btn_row.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn_row, text="Load", command=_do_load).pack(side="right", padx=(6, 0))
+        ttk.Button(btn_row, text="Cancel", command=win.destroy).pack(side="right")
+
+        listbox.bind("<Double-1>", lambda e: _do_load())
+
+    def _delete_profile_dialog():
+        profs = list_profiles()
+        if not profs:
+            messagebox.showinfo("No Profiles",
+                "No saved profiles to delete.")
+            return
+        names = [p[0] for p in profs]
+
+        win = tk.Toplevel(root)
+        win.title("Delete Profile")
+        win.configure(bg=BG)
+        win.geometry("340x300")
+        win.transient(root)
+        win.grab_set()
+
+        ttk.Label(win, text="Pick a profile to delete:").pack(
+            anchor="w", padx=12, pady=(12, 6))
+
+        listbox = tk.Listbox(win, bg=BG_MID, fg=FG, font=FONT_SM,
+                              selectbackground=RED, selectforeground="#fff",
+                              borderwidth=0, highlightthickness=1,
+                              highlightcolor=RED)
+        listbox.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        for n in names:
+            listbox.insert("end", f"  {n}")
+
+        def _do_delete():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            chosen = names[sel[0]]
+            if messagebox.askyesno("Confirm",
+                    f"Delete profile \"{chosen}\"?", parent=win):
+                delete_profile(chosen)
+                listbox.delete(sel[0])
+                names.pop(sel[0])
+                # if that was the loaded profile, clear the label
+                if chosen in profile_label_var.get():
+                    profile_label_var.set("No profile loaded")
+                    root.title("Simple eBook Merger v3.0")
+                if not names:
+                    win.destroy()
+
+        btn_row = ttk.Frame(win)
+        btn_row.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn_row, text="Delete", command=_do_delete).pack(side="right", padx=(6, 0))
+        ttk.Button(btn_row, text="Close", command=win.destroy).pack(side="right")
+
+    # we need simpledialog for the save-profile name prompt
+    import tkinter.simpledialog as _sd
+    tk.simpledialog = _sd
+
+    ttk.Button(prof_btn_row, text="Save Profile",
+               command=_save_profile_dialog).pack(side="right", padx=(4, 0))
+    ttk.Button(prof_btn_row, text="Load Profile",
+               command=_load_profile_dialog).pack(side="right", padx=(4, 0))
+    ttk.Button(prof_btn_row, text="Delete Profile",
+               command=_delete_profile_dialog).pack(side="right", padx=(4, 0))
+
     # ── input folder row ──
     row1 = ttk.Frame(outer)
     row1.pack(fill="x", pady=(0, 8))
@@ -1863,23 +2144,100 @@ def run_terminal():
     print("   By running this you accept full responsibility and agree")
     print("   to the full disclaimer in the source code. Read it.\n")
 
+    # ── handle --list-profiles ──
+    if "--list-profiles" in sys.argv:
+        profs = list_profiles()
+        if not profs:
+            print("  No saved profiles yet.\n")
+            print("  Save one with:  --save-profile \"My Profile Name\"\n")
+        else:
+            print(f"  Saved profiles ({len(profs)}):\n")
+            for pname, ppath in profs:
+                try:
+                    with open(ppath, "r", encoding="utf-8") as fh:
+                        pdata = json.load(fh)
+                    fmt = pdata.get("output_format", "?").upper()
+                    inp = pdata.get("input_dir", "?")
+                    updated = pdata.get("updated", "?")
+                    print(f"    • {pname}")
+                    print(f"      format: {fmt}  |  input: {inp}")
+                    print(f"      last updated: {updated}")
+                    print()
+                except (json.JSONDecodeError, OSError):
+                    print(f"    • {pname}  (couldn't read file)")
+                    print()
+        return
+
+    # ── handle --save-profile ──
+    if "--save-profile" in sys.argv:
+        idx = sys.argv.index("--save-profile")
+        if idx + 1 >= len(sys.argv):
+            print("  ✗ --save-profile needs a name.\n")
+            print("  Example:  --save-profile \"My Fantasy Series\"\n")
+            return
+        prof_name = sys.argv[idx + 1]
+        settings = {
+            "input_dir": INPUT_DIR,
+            "output_file": OUTPUT_FILE,
+            "book_title": BOOK_TITLE,
+            "book_author": BOOK_AUTHOR,
+            "add_dividers": ADD_DIVIDERS,
+            "output_format": OUTPUT_FORMAT,
+            "sort_order": SORT_ORDER,
+        }
+        path = save_profile(prof_name, settings)
+        print(f"  ✓ Profile saved: \"{prof_name}\"")
+        print(f"    → {path}\n")
+        return
+
+    # ── load profile if --profile was given ──
+    input_dir = INPUT_DIR
+    output_file = OUTPUT_FILE
+    book_title = BOOK_TITLE
+    book_author = BOOK_AUTHOR
+    add_dividers = ADD_DIVIDERS
+    output_format = OUTPUT_FORMAT
+    sort_order = SORT_ORDER
+
+    if "--profile" in sys.argv:
+        idx = sys.argv.index("--profile")
+        if idx + 1 >= len(sys.argv):
+            print("  ✗ --profile needs a name.\n")
+            print("  Example:  --profile \"My Fantasy Series\"")
+            print("  See saved profiles with:  --list-profiles\n")
+            return
+        prof_name = sys.argv[idx + 1]
+        pdata = load_profile(prof_name)
+        if pdata is None:
+            print(f"  ✗ No profile found named \"{prof_name}\".\n")
+            print("  See saved profiles with:  --list-profiles\n")
+            return
+        input_dir = pdata.get("input_dir", input_dir)
+        output_file = pdata.get("output_file", output_file)
+        book_title = pdata.get("book_title", book_title)
+        book_author = pdata.get("book_author", book_author)
+        add_dividers = pdata.get("add_dividers", add_dividers)
+        output_format = pdata.get("output_format", output_format)
+        sort_order = pdata.get("sort_order", sort_order)
+        print(f"  Loaded profile: \"{prof_name}\"\n")
+
     # check config
     problems = []
-    if "PUT_YOUR_FOLDER" in INPUT_DIR or not INPUT_DIR.strip():
+    if "PUT_YOUR_FOLDER" in input_dir or not input_dir.strip():
         problems.append("INPUT_DIR isn't set — edit the CONFIG section at the top of the script.")
-    elif not os.path.isdir(INPUT_DIR):
-        problems.append(f"INPUT_DIR doesn't exist: {INPUT_DIR}")
-    if not OUTPUT_FILE.strip():
+    elif not os.path.isdir(input_dir):
+        problems.append(f"INPUT_DIR doesn't exist: {input_dir}")
+    if not output_file.strip():
         problems.append("OUTPUT_FILE isn't set.")
 
-    fmt = OUTPUT_FORMAT.lower().strip()
+    fmt = output_format.lower().strip()
     if fmt not in OUTPUT_FORMATS:
-        problems.append(f"OUTPUT_FORMAT '{OUTPUT_FORMAT}' isn't valid. "
+        problems.append(f"OUTPUT_FORMAT '{output_format}' isn't valid. "
                         f"Use one of: {', '.join(OUTPUT_FORMATS)}")
 
-    sort_mode = SORT_ORDER.lower().strip() if isinstance(SORT_ORDER, str) else "smart"
+    sort_mode = sort_order.lower().strip() if isinstance(sort_order, str) else "smart"
     if sort_mode not in ("smart", "alpha"):
-        problems.append(f"SORT_ORDER '{SORT_ORDER}' isn't valid. Use 'smart' or 'alpha'.")
+        problems.append(f"SORT_ORDER '{sort_order}' isn't valid. Use 'smart' or 'alpha'.")
         sort_mode = "smart"
 
     if problems:
@@ -1891,8 +2249,8 @@ def run_terminal():
         print("\nOpen this script in a text editor and fill in the CONFIG section.\n")
         return
 
-    print(f"→ Scanning: {INPUT_DIR}\n")
-    files, skipped, sort_summary = find_ebook_files(INPUT_DIR, sort_order=sort_mode)
+    print(f"→ Scanning: {input_dir}\n")
+    files, skipped, sort_summary = find_ebook_files(input_dir, sort_order=sort_mode)
 
     for s in skipped:
         print(f"  ⚠ skipping: {s}")
@@ -1912,8 +2270,8 @@ def run_terminal():
     print(f"\n→ Merging into {fmt.upper()} format...\n")
 
     try:
-        stats = merge_files(files, OUTPUT_FILE, BOOK_TITLE, BOOK_AUTHOR,
-                            dividers=ADD_DIVIDERS, output_format=fmt)
+        stats = merge_files(files, output_file, book_title, book_author,
+                            dividers=add_dividers, output_format=fmt)
 
         print(f"\n" + "=" * 60)
         print(f"  Files merged   : {stats['files_merged']}")
@@ -1925,7 +2283,7 @@ def run_terminal():
         print(f"\n✓ Done! Saved to:\n  {stats['path']}\n")
 
     except PermissionError:
-        print(f"\nERROR: Can't write to {OUTPUT_FILE}")
+        print(f"\nERROR: Can't write to {output_file}")
         print("  Maybe it's open in another program?\n")
     except RuntimeError as e:
         print(f"\n  ✗ {e}\n")
@@ -1939,7 +2297,10 @@ def run_terminal():
 # ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if "--nogui" in sys.argv:
+    # profile management commands work with --nogui or standalone
+    if any(a in sys.argv for a in ("--list-profiles", "--save-profile", "--profile")):
+        run_terminal()
+    elif "--nogui" in sys.argv:
         run_terminal()
     else:
         try:
