@@ -1651,69 +1651,222 @@ def launch_gui():
     """
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
+    import json as _json
 
-    # ── colours / fonts ──
-    BG       = "#1e1e2e"
-    BG_MID   = "#282840"
-    BG_ENTRY = "#313148"
-    FG       = "#e0e0e8"
-    FG_DIM   = "#8888a0"
-    ACCENT   = "#7c6ff7"
-    ACCENT2  = "#9b8afb"
-    GREEN    = "#50c878"
-    RED      = "#ff6b6b"
+    # ── theme definitions ──
+    # each theme is a dict of colour slots that _apply_theme() maps onto
+    # every widget in the window
+    THEMES = {
+        "Dark": {
+            "bg": "#1e1e2e", "bg_mid": "#282840", "bg_entry": "#313148",
+            "fg": "#e0e0e8", "fg_dim": "#8888a0", "accent": "#7c6ff7",
+            "accent2": "#9b8afb", "green": "#50c878", "red": "#ff6b6b",
+            "button_bg": "#3a3a55", "button_fg": "#e0e0e8",
+            "heading_fg": "#e0e0e8", "border": "#3a3a55",
+            "log_bg": "#282840", "log_fg": "#e0e0e8",
+            "select_bg": "#7c6ff7", "warn": "#e8a838",
+        },
+        "Light": {
+            "bg": "#f0f0f5", "bg_mid": "#ffffff", "bg_entry": "#ffffff",
+            "fg": "#1a1a2e", "fg_dim": "#6b6b80", "accent": "#5b52d4",
+            "accent2": "#7268e0", "green": "#2d8f4e", "red": "#d44040",
+            "button_bg": "#dddde8", "button_fg": "#1a1a2e",
+            "heading_fg": "#1a1a2e", "border": "#c0c0d0",
+            "log_bg": "#ffffff", "log_fg": "#1a1a2e",
+            "select_bg": "#5b52d4", "warn": "#c07820",
+        },
+        "Midnight": {
+            "bg": "#0d1b2a", "bg_mid": "#1b2838", "bg_entry": "#1b2838",
+            "fg": "#c8dce8", "fg_dim": "#607888", "accent": "#3a86c8",
+            "accent2": "#5a9cd8", "green": "#40b868", "red": "#e05555",
+            "button_bg": "#1b2838", "button_fg": "#c8dce8",
+            "heading_fg": "#d0e4f0", "border": "#2a3a4a",
+            "log_bg": "#1b2838", "log_fg": "#c8dce8",
+            "select_bg": "#3a86c8", "warn": "#d0a030",
+        },
+        "Forest": {
+            "bg": "#1a2e1a", "bg_mid": "#243524", "bg_entry": "#2a3f2a",
+            "fg": "#d0e8d0", "fg_dim": "#78a078", "accent": "#48a848",
+            "accent2": "#60c060", "green": "#50d870", "red": "#e06050",
+            "button_bg": "#2a3f2a", "button_fg": "#d0e8d0",
+            "heading_fg": "#e0f0e0", "border": "#3a5a3a",
+            "log_bg": "#243524", "log_fg": "#d0e8d0",
+            "select_bg": "#48a848", "warn": "#d0b040",
+        },
+        "Sunset": {
+            "bg": "#2a1a1a", "bg_mid": "#3a2222", "bg_entry": "#452a2a",
+            "fg": "#f0dcc8", "fg_dim": "#a08070", "accent": "#d07030",
+            "accent2": "#e08840", "green": "#60b860", "red": "#e05050",
+            "button_bg": "#452a2a", "button_fg": "#f0dcc8",
+            "heading_fg": "#f8e8d0", "border": "#5a3a30",
+            "log_bg": "#3a2222", "log_fg": "#f0dcc8",
+            "select_bg": "#d07030", "warn": "#e0a030",
+        },
+    }
+
+    # ── theme persistence ──
+    _theme_dir = os.path.join(os.path.expanduser("~"), ".ebook_merger")
+    _theme_file = os.path.join(_theme_dir, "theme.json")
+
+    def _load_saved_theme():
+        try:
+            with open(_theme_file, "r") as f:
+                data = _json.load(f)
+            name = data.get("theme", "Dark")
+            if name in THEMES:
+                return name
+        except Exception:
+            pass
+        return "Dark"
+
+    def _save_theme(name):
+        try:
+            os.makedirs(_theme_dir, exist_ok=True)
+            with open(_theme_file, "w") as f:
+                _json.dump({"theme": name}, f)
+        except Exception:
+            pass
+
+    current_theme_name = _load_saved_theme()
+
+    # ── fonts ──
     FONT     = ("Segoe UI", 10)
     FONT_SM  = ("Segoe UI", 9)
     FONT_LOG = ("Consolas", 9)
     FONT_H   = ("Segoe UI", 13, "bold")
+    FONT_SECTION = ("Segoe UI", 10, "bold")
+    FONT_MERGE = ("Segoe UI", 11, "bold")
 
     root = tk.Tk()
     root.title("Simple eBook Merger v3.0")
-    root.configure(bg=BG)
     root.resizable(True, True)
+    root.geometry("720x820")
+    root.minsize(700, 600)
 
-    # try to set a reasonable starting size
-    root.geometry("680x780")
-    root.minsize(520, 600)
-
-    # ── styles ──
     style = ttk.Style()
     style.theme_use("clam")
 
-    style.configure("TFrame", background=BG)
-    style.configure("Mid.TFrame", background=BG_MID)
-    style.configure("TLabel", background=BG, foreground=FG, font=FONT)
-    style.configure("Dim.TLabel", background=BG, foreground=FG_DIM, font=FONT_SM)
-    style.configure("Head.TLabel", background=BG, foreground=FG, font=FONT_H)
+    # keep refs to tk widgets that need manual recoloring (not ttk)
+    tk_widgets = []  # filled in as we build the UI
 
-    style.configure("Accent.TButton", font=FONT, padding=(12, 6))
-    style.map("Accent.TButton",
-        background=[("active", ACCENT2), ("!active", ACCENT)],
-        foreground=[("active", "#ffffff"), ("!active", "#ffffff")],
-    )
-    style.configure("TButton", font=FONT, padding=(10, 5))
+    def _apply_theme(name):
+        """Recolour the entire window to match the named theme."""
+        nonlocal current_theme_name
+        t = THEMES[name]
+        current_theme_name = name
 
-    style.configure("TCheckbutton", background=BG, foreground=FG, font=FONT)
-    style.map("TCheckbutton", background=[("active", BG)])
+        # ttk styles
+        style.configure("TFrame", background=t["bg"])
+        style.configure("Mid.TFrame", background=t["bg_mid"])
+        style.configure("TLabel", background=t["bg"], foreground=t["fg"], font=FONT)
+        style.configure("Dim.TLabel", background=t["bg"], foreground=t["fg_dim"],
+                         font=FONT_SM)
+        style.configure("Head.TLabel", background=t["bg"],
+                         foreground=t["heading_fg"], font=FONT_H)
+        style.configure("Section.TLabel", background=t["bg"],
+                         foreground=t["heading_fg"], font=FONT_SECTION)
 
-    style.configure("TEntry", fieldbackground=BG_ENTRY, foreground=FG,
-                     insertcolor=FG, font=FONT, padding=5)
+        style.configure("Accent.TButton", font=FONT_MERGE, padding=(16, 8))
+        style.map("Accent.TButton",
+            background=[("active", t["accent2"]), ("!active", t["accent"])],
+            foreground=[("active", "#ffffff"), ("!active", "#ffffff")],
+        )
+        style.configure("TButton", font=FONT, padding=(10, 5),
+                         background=t["button_bg"], foreground=t["button_fg"])
+        style.map("TButton",
+            background=[("active", t["accent"]), ("!active", t["button_bg"])],
+            foreground=[("active", "#ffffff"), ("!active", t["button_fg"])],
+        )
 
-    style.configure("TCombobox", fieldbackground=BG_ENTRY, foreground=FG,
-                     font=FONT, padding=5)
+        # theme selector buttons
+        style.configure("ThemeBtn.TButton", font=FONT_SM, padding=(8, 3),
+                         background=t["button_bg"], foreground=t["button_fg"])
+        style.map("ThemeBtn.TButton",
+            background=[("active", t["accent"]), ("!active", t["button_bg"])],
+            foreground=[("active", "#ffffff"), ("!active", t["button_fg"])],
+        )
+        style.configure("ThemeBtnActive.TButton", font=FONT_SM, padding=(8, 3),
+                         background=t["accent"], foreground="#ffffff")
+        style.map("ThemeBtnActive.TButton",
+            background=[("active", t["accent2"]), ("!active", t["accent"])],
+            foreground=[("active", "#ffffff"), ("!active", "#ffffff")],
+        )
 
-    # ── layout ──
-    outer = ttk.Frame(root, padding=20)
+        style.configure("TCheckbutton", background=t["bg"], foreground=t["fg"],
+                         font=FONT)
+        style.map("TCheckbutton", background=[("active", t["bg"])])
+
+        style.configure("TEntry", fieldbackground=t["bg_entry"],
+                         foreground=t["fg"], insertcolor=t["fg"],
+                         font=FONT, padding=5)
+
+        style.configure("TCombobox", fieldbackground=t["bg_entry"],
+                         foreground=t["fg"], font=FONT, padding=5)
+
+        style.configure("TLabelframe", background=t["bg"],
+                         foreground=t["fg_dim"], bordercolor=t["border"])
+        style.configure("TLabelframe.Label", background=t["bg"],
+                         foreground=t["fg_dim"], font=FONT_SM)
+
+        style.configure("Status.TLabel", background=t["bg_mid"],
+                         foreground=t["fg_dim"], font=FONT_SM)
+
+        # root window
+        root.configure(bg=t["bg"])
+
+        # recolour all plain tk widgets we're keeping tabs on
+        for w, role in tk_widgets:
+            try:
+                if role == "listbox":
+                    w.configure(bg=t["bg_mid"], fg=t["fg"],
+                                selectbackground=t["select_bg"],
+                                selectforeground="#fff")
+                elif role == "log":
+                    w.configure(bg=t["log_bg"], fg=t["log_fg"])
+                    w.tag_configure("ok",   foreground=t["green"])
+                    w.tag_configure("warn", foreground=t["warn"])
+                    w.tag_configure("err",  foreground=t["red"])
+                    w.tag_configure("dim",  foreground=t["fg_dim"])
+                elif role == "statusbar":
+                    w.configure(bg=t["bg_mid"])
+            except Exception:
+                pass
+
+        # update theme-button relief to show which is active
+        for tname, btn in theme_buttons.items():
+            if tname == name:
+                btn.configure(style="ThemeBtnActive.TButton")
+            else:
+                btn.configure(style="ThemeBtn.TButton")
+
+        _save_theme(name)
+
+    # ── layout: use grid for the outer frame so sections resize ──
+    outer = ttk.Frame(root, padding=(16, 10, 16, 0))
     outer.pack(fill="both", expand=True)
 
-    # header
-    ttk.Label(outer, text="Simple eBook Merger v3.0", style="Head.TLabel").pack(anchor="w")
-    ttk.Label(outer, text="Toss your files in a folder, pick it, hit merge.",
-              style="Dim.TLabel").pack(anchor="w", pady=(0, 14))
+    # ── theme bar (very top) ──
+    theme_bar = ttk.Frame(outer)
+    theme_bar.pack(fill="x", pady=(0, 8))
+    ttk.Label(theme_bar, text="Theme:", style="Dim.TLabel").pack(
+        side="left", padx=(0, 8))
 
-    # ── profiles toolbar ──
-    prof_frame = ttk.LabelFrame(outer, text=" Profiles ", padding=(8, 4))
-    prof_frame.pack(fill="x", pady=(0, 12))
+    theme_buttons = {}
+    for tname in THEMES:
+        btn = ttk.Button(theme_bar, text=tname, style="ThemeBtn.TButton",
+                          command=lambda n=tname: _apply_theme(n))
+        btn.pack(side="left", padx=(0, 4))
+        theme_buttons[tname] = btn
+
+    # ── header ──
+    ttk.Label(outer, text="Simple eBook Merger v3.0",
+              style="Head.TLabel").pack(anchor="w")
+    ttk.Label(outer, text="Toss your files in a folder, pick it, hit merge.",
+              style="Dim.TLabel").pack(anchor="w", pady=(0, 10))
+
+    # ── profiles section ──
+    prof_frame = ttk.LabelFrame(outer, text="  Profiles  ", padding=(10, 6))
+    prof_frame.pack(fill="x", pady=(0, 10))
 
     profile_label_var = tk.StringVar(value="No profile loaded")
 
@@ -1780,11 +1933,17 @@ def launch_gui():
         names = [p[0] for p in profs]
         _pick_profile_window(names)
 
+    def _popup_colors():
+        """Grab current theme colours for popup windows."""
+        t = THEMES[current_theme_name]
+        return t
+
     def _pick_profile_window(names):
         """Small popup to pick a profile from a list."""
+        t = _popup_colors()
         win = tk.Toplevel(root)
         win.title("Load Profile")
-        win.configure(bg=BG)
+        win.configure(bg=t["bg"])
         win.geometry("340x300")
         win.transient(root)
         win.grab_set()
@@ -1792,10 +1951,11 @@ def launch_gui():
         ttk.Label(win, text="Pick a profile to load:").pack(
             anchor="w", padx=12, pady=(12, 6))
 
-        listbox = tk.Listbox(win, bg=BG_MID, fg=FG, font=FONT_SM,
-                              selectbackground=ACCENT, selectforeground="#fff",
+        listbox = tk.Listbox(win, bg=t["bg_mid"], fg=t["fg"], font=FONT_SM,
+                              selectbackground=t["accent"],
+                              selectforeground="#fff",
                               borderwidth=0, highlightthickness=1,
-                              highlightcolor=ACCENT)
+                              highlightcolor=t["accent"])
         listbox.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         for n in names:
             listbox.insert("end", f"  {n}")
@@ -1812,8 +1972,10 @@ def launch_gui():
 
         btn_row = ttk.Frame(win)
         btn_row.pack(fill="x", padx=12, pady=(0, 12))
-        ttk.Button(btn_row, text="Load", command=_do_load).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_row, text="Cancel", command=win.destroy).pack(side="right")
+        ttk.Button(btn_row, text="Load", command=_do_load).pack(
+            side="right", padx=(6, 0))
+        ttk.Button(btn_row, text="Cancel", command=win.destroy).pack(
+            side="right")
 
         listbox.bind("<Double-1>", lambda e: _do_load())
 
@@ -1825,9 +1987,10 @@ def launch_gui():
             return
         names = [p[0] for p in profs]
 
+        t = _popup_colors()
         win = tk.Toplevel(root)
         win.title("Delete Profile")
-        win.configure(bg=BG)
+        win.configure(bg=t["bg"])
         win.geometry("340x300")
         win.transient(root)
         win.grab_set()
@@ -1835,10 +1998,11 @@ def launch_gui():
         ttk.Label(win, text="Pick a profile to delete:").pack(
             anchor="w", padx=12, pady=(12, 6))
 
-        listbox = tk.Listbox(win, bg=BG_MID, fg=FG, font=FONT_SM,
-                              selectbackground=RED, selectforeground="#fff",
+        listbox = tk.Listbox(win, bg=t["bg_mid"], fg=t["fg"], font=FONT_SM,
+                              selectbackground=t["red"],
+                              selectforeground="#fff",
                               borderwidth=0, highlightthickness=1,
-                              highlightcolor=RED)
+                              highlightcolor=t["red"])
         listbox.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         for n in names:
             listbox.insert("end", f"  {n}")
@@ -1862,8 +2026,10 @@ def launch_gui():
 
         btn_row = ttk.Frame(win)
         btn_row.pack(fill="x", padx=12, pady=(0, 12))
-        ttk.Button(btn_row, text="Delete", command=_do_delete).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_row, text="Close", command=win.destroy).pack(side="right")
+        ttk.Button(btn_row, text="Delete", command=_do_delete).pack(
+            side="right", padx=(6, 0))
+        ttk.Button(btn_row, text="Close", command=win.destroy).pack(
+            side="right")
 
     # we need simpledialog for the save-profile name prompt
     import tkinter.simpledialog as _sd
@@ -1876,10 +2042,13 @@ def launch_gui():
     ttk.Button(prof_btn_row, text="Delete Profile",
                command=_delete_profile_dialog).pack(side="right", padx=(4, 0))
 
-    # ── input folder row ──
-    row1 = ttk.Frame(outer)
-    row1.pack(fill="x", pady=(0, 8))
-    ttk.Label(row1, text="Input folder:").pack(side="left")
+    # ── input section ──
+    input_frame = ttk.LabelFrame(outer, text="  Input  ", padding=(10, 6))
+    input_frame.pack(fill="x", pady=(0, 10))
+
+    row1 = ttk.Frame(input_frame)
+    row1.pack(fill="x", pady=(0, 6))
+    ttk.Label(row1, text="Folder:").pack(side="left")
 
     input_var = tk.StringVar()
     input_entry = ttk.Entry(row1, textvariable=input_var)
@@ -1893,9 +2062,22 @@ def launch_gui():
 
     ttk.Button(row1, text="Browse...", command=pick_folder).pack(side="right")
 
-    # ── output file row ──
-    row2 = ttk.Frame(outer)
-    row2.pack(fill="x", pady=(0, 8))
+    # file preview inside the input section
+    file_listbox = tk.Listbox(input_frame, font=FONT_SM,
+                               borderwidth=0, highlightthickness=0, height=10)
+    file_listbox.pack(fill="both", expand=True, pady=(0, 4))
+    tk_widgets.append((file_listbox, "listbox"))
+
+    file_count_var = tk.StringVar(value="No folder selected yet")
+    ttk.Label(input_frame, textvariable=file_count_var,
+              style="Dim.TLabel").pack(anchor="w")
+
+    # ── output section ──
+    output_frame = ttk.LabelFrame(outer, text="  Output  ", padding=(10, 6))
+    output_frame.pack(fill="x", pady=(0, 10))
+
+    row2 = ttk.Frame(output_frame)
+    row2.pack(fill="x", pady=(0, 6))
     ttk.Label(row2, text="Save as:").pack(side="left")
 
     output_var = tk.StringVar(value="merged_book.epub")
@@ -1923,18 +2105,18 @@ def launch_gui():
 
     ttk.Button(row2, text="Browse...", command=pick_output).pack(side="right")
 
-    # ── output format row ──
-    row_fmt = ttk.Frame(outer)
-    row_fmt.pack(fill="x", pady=(0, 8))
-    ttk.Label(row_fmt, text="Output format:").pack(side="left")
+    # format + title + author in a sub-grid
+    meta_row = ttk.Frame(output_frame)
+    meta_row.pack(fill="x", pady=(0, 2))
 
+    ttk.Label(meta_row, text="Format:").pack(side="left")
     format_var = tk.StringVar(value="EPUB")
     format_combo = ttk.Combobox(
-        row_fmt, textvariable=format_var,
+        meta_row, textvariable=format_var,
         values=["EPUB", "TXT", "HTML", "PDF", "DOCX"],
-        state="readonly", width=10,
+        state="readonly", width=8,
     )
-    format_combo.pack(side="left", padx=(8, 0))
+    format_combo.pack(side="left", padx=(8, 16))
 
     def _on_format_change(event=None):
         fmt = format_var.get().lower()
@@ -1946,33 +2128,33 @@ def launch_gui():
 
     format_combo.bind("<<ComboboxSelected>>", _on_format_change)
 
-    # ── title / author row ──
-    row3 = ttk.Frame(outer)
-    row3.pack(fill="x", pady=(0, 8))
-
-    ttk.Label(row3, text="Title:").pack(side="left")
+    ttk.Label(meta_row, text="Title:").pack(side="left")
     title_var = tk.StringVar(value="My Merged eBook")
-    ttk.Entry(row3, textvariable=title_var, width=24).pack(side="left", padx=(8, 16))
+    ttk.Entry(meta_row, textvariable=title_var, width=20).pack(
+        side="left", padx=(8, 16))
 
-    ttk.Label(row3, text="Author:").pack(side="left")
+    ttk.Label(meta_row, text="Author:").pack(side="left")
     author_var = tk.StringVar(value="Various Authors")
-    ttk.Entry(row3, textvariable=author_var).pack(side="left", fill="x", expand=True, padx=(8, 0))
+    ttk.Entry(meta_row, textvariable=author_var).pack(
+        side="left", fill="x", expand=True, padx=(8, 0))
 
-    # ── dividers checkbox ──
+    # ── options section ──
+    options_frame = ttk.LabelFrame(outer, text="  Options  ", padding=(10, 6))
+    options_frame.pack(fill="x", pady=(0, 10))
+
+    opt_row = ttk.Frame(options_frame)
+    opt_row.pack(fill="x")
+
     dividers_var = tk.BooleanVar(value=True)
-    ttk.Checkbutton(outer, text="Insert divider pages between files",
-                     variable=dividers_var).pack(anchor="w", pady=(0, 8))
+    ttk.Checkbutton(opt_row, text="Insert divider pages between files",
+                     variable=dividers_var).pack(side="left")
 
-    # ── sort order row ──
-    row_sort = ttk.Frame(outer)
-    row_sort.pack(fill="x", pady=(0, 10))
-    ttk.Label(row_sort, text="Sort order:").pack(side="left")
-
+    ttk.Label(opt_row, text="Sort:").pack(side="left", padx=(24, 0))
     sort_var = tk.StringVar(value="Smart Order (Recommended)")
     sort_combo = ttk.Combobox(
-        row_sort, textvariable=sort_var,
+        opt_row, textvariable=sort_var,
         values=["Smart Order (Recommended)", "Alphabetical (A-Z)"],
-        state="readonly", width=28,
+        state="readonly", width=26,
     )
     sort_combo.pack(side="left", padx=(8, 0))
 
@@ -1980,19 +2162,6 @@ def launch_gui():
         _refresh_file_list()
 
     sort_combo.bind("<<ComboboxSelected>>", _on_sort_change)
-
-    # ── file preview ──
-    preview_frame = ttk.LabelFrame(outer, text=" Files to merge ", padding=8)
-    preview_frame.pack(fill="both", expand=False, pady=(0, 8))
-    preview_frame.configure(height=120)
-
-    file_listbox = tk.Listbox(preview_frame, bg=BG_MID, fg=FG, font=FONT_SM,
-                               selectbackground=ACCENT, selectforeground="#fff",
-                               borderwidth=0, highlightthickness=0, height=6)
-    file_listbox.pack(fill="both", expand=True)
-
-    file_count_var = tk.StringVar(value="No folder selected yet")
-    ttk.Label(outer, textvariable=file_count_var, style="Dim.TLabel").pack(anchor="w", pady=(0, 6))
 
     def _get_sort_mode():
         return "smart" if "Smart" in sort_var.get() else "alpha"
@@ -2013,23 +2182,34 @@ def launch_gui():
             note += f", {len(skipped)} skipped"
         file_count_var.set(note)
 
-    # ── log output ──
-    log_frame = ttk.LabelFrame(outer, text=" Log ", padding=6)
-    log_frame.pack(fill="both", expand=True, pady=(0, 10))
+    # ── merge section ──
+    merge_frame = ttk.LabelFrame(outer, text="  Merge  ", padding=(10, 8))
+    merge_frame.pack(fill="x", pady=(0, 10))
 
-    log_text = tk.Text(log_frame, bg=BG_MID, fg=FG, font=FONT_LOG,
+    merge_row = ttk.Frame(merge_frame)
+    merge_row.pack(fill="x")
+
+    status_var = tk.StringVar(value="Ready")
+    ttk.Label(merge_row, textvariable=status_var,
+              style="Dim.TLabel").pack(side="left")
+
+    merge_btn = ttk.Button(merge_row, text="  Merge  ",
+                            style="Accent.TButton")
+    merge_btn.pack(side="right")
+
+    # ── log section ──
+    log_frame = ttk.LabelFrame(outer, text="  Log  ", padding=(8, 6))
+    log_frame.pack(fill="both", expand=True, pady=(0, 8))
+
+    log_text = tk.Text(log_frame, font=FONT_LOG,
                         wrap="word", borderwidth=0, highlightthickness=0,
-                        state="disabled", height=10)
-    log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=log_text.yview)
+                        state="disabled", height=12)
+    log_scroll = ttk.Scrollbar(log_frame, orient="vertical",
+                                command=log_text.yview)
     log_text.configure(yscrollcommand=log_scroll.set)
     log_scroll.pack(side="right", fill="y")
     log_text.pack(side="left", fill="both", expand=True)
-
-    # coloured tags
-    log_text.tag_configure("ok",   foreground=GREEN)
-    log_text.tag_configure("warn", foreground="#e8a838")
-    log_text.tag_configure("err",  foreground=RED)
-    log_text.tag_configure("dim",  foreground=FG_DIM)
+    tk_widgets.append((log_text, "log"))
 
     def write_log(msg, tag=None):
         log_text.configure(state="normal")
@@ -2040,15 +2220,17 @@ def launch_gui():
         log_text.see("end")
         log_text.configure(state="disabled")
 
-    # ── bottom bar ──
-    bottom = ttk.Frame(outer)
-    bottom.pack(fill="x")
+    # ── status bar at the very bottom ──
+    status_bar = tk.Frame(root, height=24)
+    status_bar.pack(fill="x", side="bottom")
+    tk_widgets.append((status_bar, "statusbar"))
 
-    status_var = tk.StringVar(value="Ready")
-    ttk.Label(bottom, textvariable=status_var, style="Dim.TLabel").pack(side="left")
+    status_bar_label = ttk.Label(status_bar, textvariable=status_var,
+                                  style="Status.TLabel", padding=(8, 3))
+    status_bar_label.pack(fill="x")
 
-    merge_btn = ttk.Button(bottom, text="Merge", style="Accent.TButton")
-    merge_btn.pack(side="right")
+    # ── apply the saved theme now that all widgets exist ──
+    _apply_theme(current_theme_name)
 
     # ── merge action ──
     def do_merge():
