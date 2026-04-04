@@ -135,7 +135,7 @@ If any part of this is found unenforceable, the rest still stands. You don't get
 
 ### Governing Law
 
-Governed by California law. Disputes settled in California courts. Yes, you'd have to fly here. No, I won't pay for your ticket.
+Governed by the laws of whatever jurisdiction the author resides in at the time of the dispute — and no, I'm not telling you where that is. If there's a conflict, it gets resolved wherever I feel like filing. Good luck with that.
 
 ### Support the Authors
 

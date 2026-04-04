@@ -191,11 +191,12 @@ NOTES
      thing because one clause was too spicy.
 
   9. GOVERNING LAW
-     This disclaimer is governed by the laws of the
-     State of California, United States, regardless of
-     where you are. If there's a dispute, it gets
-     settled in California courts. Yes, you'd have to
-     fly here. No, I won't pay for your ticket.
+     This disclaimer is governed by the laws of whatever
+     jurisdiction the author happens to reside in at the
+     time of the dispute — and no, I'm not telling you
+     where that is. If there's a legal conflict, it gets
+     resolved wherever I feel like filing. You agreed to
+     this. Good luck with that.
 
   10. FINAL CLAUSE — THE "I REALLY MEAN IT" CLAUSE
       By using this software you acknowledge that:
