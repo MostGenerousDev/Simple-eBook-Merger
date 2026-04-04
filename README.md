@@ -10,21 +10,13 @@ Supports **EPUB**, **TXT**, **HTML**, **PDF**, **DOCX**, **RTF**, **Markdown**, 
 
 ## Screenshots
 
-### Dark Theme (default)
-![Dark Theme](screenshots/01_dark_theme.png)
+![Dark Theme](screenshots/dark_theme.png)
 
-### Light Theme
-![Light Theme](screenshots/02_light_theme.png)
+Five built-in themes — switches instantly and remembers your choice.
 
-### All Themes
-Five built-in themes — pick whatever works for your eyes. Switches instantly and remembers your choice.
-
-| Midnight | Forest | Sunset |
-|---|---|---|
-| ![Midnight](screenshots/03_midnight_theme.png) | ![Forest](screenshots/04_forest_theme.png) | ![Sunset](screenshots/05_sunset_theme.png) |
-
-### Merge, History & Log
-![Bottom sections](screenshots/07_bottom_sections.png)
+| Light | Midnight | Forest | Sunset |
+|---|---|---|---|
+| <img src="screenshots/light_theme.png" width="180"> | <img src="screenshots/midnight_theme.png" width="180"> | <img src="screenshots/forest_theme.png" width="180"> | <img src="screenshots/sunset_theme.png" width="180"> |
 
 ================================================================================
 
