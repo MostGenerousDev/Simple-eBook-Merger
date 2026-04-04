@@ -61,38 +61,156 @@ NOTES
     can't strip DRM.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠  LEGAL DISCLAIMER — READ BEFORE USE
+⚠  LEGAL DISCLAIMER — PLEASE READ, I'M BEGGING YOU
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  BY RUNNING THIS SCRIPT YOU AGREE TO ALL OF THE FOLLOWING.
-  IF YOU DON'T AGREE, CLOSE IT NOW.
+  BY DOWNLOADING, VIEWING, THINKING ABOUT, DREAMING ABOUT,
+  MENTIONING IN PASSING, RUNNING, COMPILING, DECOMPILING,
+  REVERSE-ENGINEERING, SCREEN-SHOTTING, PRINTING OUT AND
+  FOLDING INTO A PAPER AIRPLANE, OR OTHERWISE INTERACTING
+  WITH THIS SOFTWARE IN ANY WAY — INCLUDING BUT NOT LIMITED
+  TO STARING AT IT REAL HARD — YOU ACKNOWLEDGE THAT YOU HAVE
+  READ, UNDERSTOOD, MEMORIZED, AND TATTOOED THE FOLLOWING
+  TERMS ONTO YOUR SOUL. IF YOU DO NOT AGREE, CLOSE THIS
+  IMMEDIATELY, DELETE IT FROM YOUR COMPUTER, BURN THE HARD
+  DRIVE, AND BURY THE ASHES AT A CROSSROADS AT MIDNIGHT.
 
-  1. PERSONAL USE ONLY
-     This is for merging files you already own for your own
-     reading convenience. That's it.
+  1. PERSONAL USE ONLY — SERIOUSLY
+     This script exists for one reason: so you can merge
+     ebook files YOU ALREADY OWN into one file for YOUR OWN
+     eyeballs. That's it. If you use it for literally
+     anything else, that's a you problem, not a me problem.
 
-  2. COPYRIGHT
-     The stuff you merge is probably copyrighted. That means
-     you can't share, upload, sell, or redistribute the
-     output. You also can't strip DRM to use this — that
-     would violate the DMCA (17 U.S.C. §1201) among other
-     things. Seriously, don't do it.
+  2. COPYRIGHT — DON'T BE THAT GUY
+     The stuff you merge is almost certainly copyrighted by
+     someone who isn't you. You may NOT, under any
+     circumstances, in this universe or any parallel one:
+       • Share, upload, email, fax, telegraph, send via
+         carrier pigeon, or otherwise transmit the output
+       • Sell it, trade it, barter it for goats, or
+         monetize it in any way whatsoever
+       • Post it online anywhere — not even "just for
+         friends," not even on a private Discord, not even
+         on a USB stick you "accidentally" leave somewhere
+       • Use it for AI training, data mining, or feeding
+         to any kind of machine learning model
+       • Strip DRM to feed files into this — that violates
+         the DMCA (17 U.S.C. §1201) and I am NOT catching
+         a federal charge because you wanted free books
+       • Print it out and wallpaper your bathroom with it
+         (actually that one might be fine, but I'm still
+         not liable)
+     Violating copyright law can get you fined into the
+     shadow realm and/or imprisoned. Don't test it.
 
-  3. NO WARRANTY
-     Provided "as is." If it breaks, sorry — no guarantees.
-     I tested it plenty but I'm not liable if something goes
-     wrong on your end.
+  3. ABSOLUTELY ZERO WARRANTY — NONE — VOID — NADA
+     This software is provided "AS IS" and "AS AVAILABLE"
+     and "WITH ALL FAULTS" and "GOOD LUCK" and "DON'T LOOK
+     AT ME" — without warranty of any kind, express, implied,
+     spiritual, hypothetical, or interdimensional, including
+     but not limited to the warranties of merchantability,
+     fitness for a particular purpose, non-infringement,
+     accuracy, reliability, or the warranty that it won't
+     set your computer on fire (it won't, probably, but
+     legally speaking I make no promises).
 
-  4. LIABILITY & INDEMNIFICATION
-     You're responsible for how you use this and what you do
-     with the output. If you get in trouble for misusing it,
-     that's on you, not me. You agree to hold me harmless
-     from any claims that come from your usage.
+     I tested this thing. It works on my machine. If it
+     doesn't work on yours: skill issue. (Kidding. Mostly.
+     But still not my fault.)
 
-  5. SUPPORT THE AUTHORS
-     If you're merging chapters from a series you love,
-     make sure you actually bought/supported it. This tool
-     is meant to make YOUR reading easier, not to rip
-     anyone off.
+  4. LIMITATION OF LIABILITY — THE BIG ONE
+     TO THE MAXIMUM EXTENT PERMITTED BY EVERY LAW THAT HAS
+     EVER BEEN WRITTEN, IS CURRENTLY BEING WRITTEN, OR WILL
+     BE WRITTEN IN THE FUTURE BY ANY GOVERNING BODY ON
+     EARTH, IN SPACE, OR ON ANY CELESTIAL BODY THAT MAY
+     EVENTUALLY BE COLONIZED:
+
+     I am not liable for ANYTHING. Not for:
+       • Your computer exploding (it won't)
+       • Your files getting corrupted (back them up)
+       • Your eReader bricking (not how that works)
+       • Your cat walking across the keyboard mid-merge
+       • Lost profits, lost data, lost time, lost sleep,
+         lost friendships, existential dread, or emotional
+         distress caused by a poorly formatted chapter break
+       • Any lawsuits, fines, cease-and-desists, angry
+         emails, or strongly worded letters you receive
+       • Acts of God, acts of war, acts of Congress, acts
+         of your IT department, or acts of sheer stupidity
+       • Anything else that happens, has happened, or could
+         theoretically happen in any timeline
+
+     My total liability to you, for everything, forever,
+     across all claims, is exactly $0.00 USD. Not a penny
+     more. You paid nothing for this. You get nothing back.
+     That's how free software works.
+
+  5. INDEMNIFICATION — YOU PROTECT ME, NOT THE OTHER WAY AROUND
+     If someone comes after me because of something YOU did
+     with this script, YOU agree to:
+       • Pay all my legal fees (and my lawyer isn't cheap)
+       • Defend me in court (bring snacks)
+       • Cover any damages, settlements, fines, or
+         judgments — including the ones that haven't been
+         invented yet
+       • Basically make me whole, as if your reckless
+         behavior never happened
+     This applies even if I somehow contributed to the
+     problem by, say, writing a script that works too well.
+
+  6. YOUR RESPONSIBILITY — ALL OF IT
+     You are a grown human being (or a very talented dog,
+     I don't judge) and you bear SOLE, COMPLETE, ABSOLUTE,
+     TOTAL, UNQUALIFIED, NO-TAKEBACKS responsibility for:
+       • Everything you do with this script
+       • Everything that happens as a result
+       • Making sure you're not breaking any laws —
+         federal, state, local, international, maritime,
+         intergalactic, or HOA
+       • Any consequences, legal or otherwise, including
+         but not limited to imprisonment, fines, social
+         ostracism, bad karma, or haunting by the ghost
+         of a displeased author
+     "I didn't read the disclaimer" is not a defense.
+     "I didn't know" is not a defense. "My dog did it"
+     is not a defense (even if your dog is the talented
+     one mentioned above).
+
+  7. SUPPORT THE AUTHORS — THE MORAL PART
+     Look, I built this so reading is more convenient,
+     not so people can rip off writers. If you're merging
+     chapters from a series you love, MAKE SURE you
+     actually paid for it. Authors are real people with
+     rent to pay. Support them. Buy their stuff. Leave
+     nice reviews. Don't be the reason they quit writing.
+
+  8. SEVERABILITY — THE LEGAL SAFETY NET
+     If any part of this disclaimer is found to be
+     unenforceable by a court of law (or a particularly
+     aggressive homeowners association), the rest of it
+     still stands. You don't get to throw out the whole
+     thing because one clause was too spicy.
+
+  9. GOVERNING LAW
+     This disclaimer is governed by the laws of the
+     State of California, United States, regardless of
+     where you are. If there's a dispute, it gets
+     settled in California courts. Yes, you'd have to
+     fly here. No, I won't pay for your ticket.
+
+  10. FINAL CLAUSE — THE "I REALLY MEAN IT" CLAUSE
+      By using this software you acknowledge that:
+        • You read all of this (yes, ALL of it)
+        • You understood it (or at least tried)
+        • You agree to every single word
+        • You will not now, or at any point in the
+          future, try to hold me responsible for
+          anything related to this script
+        • You accept that this disclaimer may be
+          updated at any time and it's on you to
+          check for changes
+        • If you somehow find a loophole, congrats,
+          but the spirit of this disclaimer still
+          applies and you know it
 """
 
 import os
@@ -753,7 +871,10 @@ def run_terminal():
     print("⚠  LEGAL REMINDER:")
     print("   Personal use only. Only merge files you actually own.")
     print("   Don't distribute copyrighted material.")
-    print("   By running this you accept full responsibility.\n")
+    print("   I am not liable for ANYTHING. Not your files, not your")
+    print("   computer, not your cat, not your existential dread.")
+    print("   By running this you accept full responsibility and agree")
+    print("   to the full disclaimer in the source code. Read it.\n")
 
     # check config
     problems = []

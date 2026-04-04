@@ -97,21 +97,53 @@ The GUI handles all of this through the window. These settings only matter if yo
 
 ## Legal Disclaimer
 
-By using this you agree to the following.
+By downloading, viewing, thinking about, dreaming about, or otherwise interacting with this software — including staring at it real hard — you agree to the following.
 
-This is for **personal use only** — merging files you already own for your own reading convenience.
+### Personal Use Only
 
-The content you merge is probably copyrighted. You **cannot** share, upload, sell, or redistribute the merged output. You also can't use this as a reason to strip DRM from protected files — that violates the DMCA and other laws.
+This is for merging ebook files **you already own** into one file for **your own eyeballs.** That's it. If you use it for literally anything else, that's a you problem, not a me problem.
 
-No warranty. Provided "as is." I've tested it thoroughly but I'm not responsible if something goes sideways on your setup.
+### Copyright — Don't Be That Guy
 
-**You** are responsible for how you use this tool and for making sure you're not breaking any laws. If you get in trouble, that's on you — you agree to hold me harmless from any claims.
+The stuff you merge is almost certainly copyrighted. You may NOT:
 
-If you're merging chapters from a series you love, make sure you actually paid for it. This tool makes reading more convenient — it's not meant to help anyone rip off the authors who wrote the stuff.
+- Share, upload, email, fax, telegraph, or send via carrier pigeon the output
+- Sell it, trade it, barter it for goats, or monetize it in any way
+- Post it online anywhere — not even "just for friends," not even on a private Discord
+- Use it for AI training or data mining
+- Strip DRM to feed files into this — that violates the DMCA (17 U.S.C. §1201) and I am NOT catching a federal charge because you wanted free books
+
+### Absolutely Zero Warranty
+
+This software is provided "AS IS" and "AS AVAILABLE" and "WITH ALL FAULTS" and "GOOD LUCK" — without warranty of any kind, express, implied, spiritual, or interdimensional, including warranties of merchantability, fitness for a particular purpose, or the warranty that it won't set your computer on fire (it won't, probably, but legally I make no promises). I tested it. It works on my machine.
+
+### Limitation of Liability — The Big One
+
+To the maximum extent permitted by every law that has ever been written, is currently being written, or will be written in the future by any governing body on Earth, in space, or on any celestial body that may eventually be colonized: **I am not liable for anything.** Not your files, not your computer, not your cat walking across the keyboard, not lost data, not emotional distress from a bad chapter break, not acts of God, acts of Congress, or acts of sheer stupidity. My total liability across all claims is **$0.00 USD.** You paid nothing. You get nothing back.
+
+### Indemnification — You Protect Me
+
+If someone comes after me because of something you did with this script, you agree to pay all my legal fees, defend me in court (bring snacks), and cover any damages. This applies even if I somehow contributed by writing a script that works too well.
+
+### Your Responsibility
+
+You bear sole, complete, absolute, no-takebacks responsibility for everything you do with this. "I didn't read the disclaimer" is not a defense. "My dog did it" is also not a defense.
+
+### Severability
+
+If any part of this is found unenforceable, the rest still stands. You don't get to throw out the whole thing because one clause was too spicy.
+
+### Governing Law
+
+Governed by California law. Disputes settled in California courts. Yes, you'd have to fly here. No, I won't pay for your ticket.
+
+### Support the Authors
+
+I built this so reading is more convenient, not so people can rip off writers. If you're merging chapters from a series you love, make sure you actually paid for it. Authors have rent to pay. Buy their stuff. Leave nice reviews. Don't be the reason they quit.
 
 ================================================================================
 
 ## License
 
-Released for personal use. See the disclaimer above.
+Released for personal use. See the disclaimer above (seriously, read it — it's actually pretty funny).
 I don't claim ownership over anything this script processes.
