@@ -74,10 +74,6 @@ NOTES
   - Output is EPUB 3 by default, works with Calibre, Apple
     Books, Kobo, Kindle (via Send to Kindle / conversion),
     Rockbox, etc.
-  - DRM-protected files won't work — the script doesn't and
-    can't strip DRM.
-  - Every output file gets a hidden watermark fingerprint
-    for tracing. The fingerprint is shown in the log.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠  LEGAL DISCLAIMER — PLEASE READ, I'M BEGGING YOU
@@ -112,9 +108,6 @@ NOTES
          on a USB stick you "accidentally" leave somewhere
        • Use it for AI training, data mining, or feeding
          to any kind of machine learning model
-       • Strip DRM to feed files into this — that violates
-         the DMCA (17 U.S.C. §1201) and I am NOT catching
-         a federal charge because you wanted free books
        • Print it out and wallpaper your bathroom with it
          (actually that one might be fine, but I'm still
          not liable)
@@ -236,8 +229,7 @@ NOTES
 import os
 import sys
 import uuid
-import hashlib
-import random
+
 import re
 import html as html_module
 import threading
@@ -351,135 +343,6 @@ OUTPUT_EXT_MAP = {
     "pdf": ".pdf",
     "docx": ".docx",
 }
-
-
-# ──────────────────────────────────────────────────────────────
-# Watermark engine
-# ──────────────────────────────────────────────────────────────
-
-# Zero-width characters used to encode fingerprint bits
-_ZW_CHARS = ["\u200b", "\u200c", "\u200d", "\ufeff"]
-
-
-def _generate_watermark():
-    """
-    Create a fresh watermark fingerprint for this merge.
-    Returns a dict with the watermark ID, timestamp, and hash.
-    """
-    wm_id = uuid.uuid4().hex
-    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    raw = f"{wm_id}-{ts}"
-    wm_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
-    return {
-        "id": wm_id,
-        "timestamp": ts,
-        "hash": wm_hash,
-        "short": wm_id[:12],
-        "full_tag": f"wm:{wm_id[:12]}:{ts}:{wm_hash}",
-    }
-
-
-def _encode_zw(text, fingerprint):
-    """
-    Encode a fingerprint string as zero-width characters and
-    sprinkle them into the text at random-ish positions.
-    """
-    # convert fingerprint to a sequence of zero-width chars
-    zw_seq = ""
-    for ch in fingerprint:
-        idx = ord(ch) % len(_ZW_CHARS)
-        zw_seq += _ZW_CHARS[idx]
-
-    if len(text) < 10:
-        return text + zw_seq
-
-    # insert the zero-width sequence in chunks at spaced positions
-    chunk_size = max(1, len(zw_seq) // 5)
-    chunks = [zw_seq[i:i+chunk_size] for i in range(0, len(zw_seq), chunk_size)]
-
-    positions = sorted(random.sample(
-        range(10, max(11, len(text) - 1)),
-        min(len(chunks), max(1, len(text) // 50))
-    ))
-
-    result = list(text)
-    for pos, chunk in zip(positions, chunks):
-        if pos < len(result):
-            result[pos] = result[pos] + chunk
-    return "".join(result)
-
-
-def _embed_watermark_epub(book, wm):
-    """Add watermark to EPUB: metadata + HTML comments + zero-width chars."""
-    book.add_metadata(None, "meta", "", {"name": "wm", "content": wm["full_tag"]})
-    book.add_metadata("DC", "description",
-                       f"<!-- wm:{wm['short']} -->")
-
-    for item in book.get_items():
-        if item.get_type() == 9:  # xhtml
-            try:
-                content = item.get_content().decode("utf-8", errors="replace")
-                # add HTML comment watermark
-                comment = f"<!-- wm:{wm['full_tag']} -->"
-                if "</body>" in content:
-                    content = content.replace("</body>", f"{comment}\n</body>", 1)
-                # add zero-width chars to text
-                content = _encode_zw(content, wm["short"])
-                item.set_content(content.encode("utf-8"))
-            except Exception:
-                pass
-
-
-def _embed_watermark_text(text, wm):
-    """Add watermark to plain text: zero-width chars + whitespace patterns."""
-    # add zero-width encoded fingerprint
-    text = _encode_zw(text, wm["full_tag"])
-
-    # add trailing whitespace pattern to encode bits of the hash
-    lines = text.split("\n")
-    hash_bits = bin(int(wm["hash"][:8], 16))[2:].zfill(32)
-    for i, bit in enumerate(hash_bits):
-        if i < len(lines):
-            lines[i] = lines[i].rstrip() + (" " * (1 + int(bit)))
-    return "\n".join(lines)
-
-
-def _embed_watermark_html(html_str, wm):
-    """Add watermark to HTML: comments + zero-width chars + meta tag."""
-    comment = f"<!-- wm:{wm['full_tag']} -->"
-    meta = f'<meta name="wm" content="{wm["full_tag"]}">'
-
-    if "<head>" in html_str:
-        html_str = html_str.replace("<head>", f"<head>\n{meta}", 1)
-    if "</body>" in html_str:
-        html_str = html_str.replace("</body>", f"\n{comment}\n</body>", 1)
-
-    html_str = _encode_zw(html_str, wm["short"])
-    return html_str
-
-
-def _embed_watermark_pdf(pdf, wm):
-    """Add watermark to PDF metadata."""
-    pdf.set_creator(f"eBook Merger 3.0 [wm:{wm['short']}]")
-    pdf.set_subject(f"wm:{wm['full_tag']}")
-    pdf.set_keywords(wm["full_tag"])
-
-
-def _embed_watermark_docx(doc, wm):
-    """Add watermark to DOCX: custom properties + zero-width chars in first para."""
-    props = doc.core_properties
-    props.comments = f"wm:{wm['full_tag']}"
-    props.keywords = wm["full_tag"]
-
-    # add zero-width chars to first paragraph if it exists
-    if doc.paragraphs:
-        for para in doc.paragraphs[:3]:
-            if para.text.strip():
-                for run in para.runs:
-                    if run.text.strip():
-                        run.text = _encode_zw(run.text, wm["short"])
-                        break
-                break
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1073,14 +936,12 @@ def _chapters_to_content_list(chapters_data):
 
 
 def _write_epub(chapters_data, spine_items, toc, output_path, title, author,
-                dividers_list, book, wm, log=print):
+                dividers_list, book, log=print):
     """Write the merged book as EPUB (the original format)."""
     book.toc = toc
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     book.spine = ["nav"] + spine_items
-
-    _embed_watermark_epub(book, wm)
 
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
@@ -1089,7 +950,7 @@ def _write_epub(chapters_data, spine_items, toc, output_path, title, author,
     epub.write_epub(output_path, book, {})
 
 
-def _write_txt(chapters_data, output_path, title, author, wm, log=print):
+def _write_txt(chapters_data, output_path, title, author, log=print):
     """Write merged content as plain text."""
     lines = []
     lines.append(f"{'=' * 60}")
@@ -1111,7 +972,6 @@ def _write_txt(chapters_data, output_path, title, author, wm, log=print):
         lines.append(text)
 
     text_out = "\n".join(lines)
-    text_out = _embed_watermark_text(text_out, wm)
 
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
@@ -1121,7 +981,7 @@ def _write_txt(chapters_data, output_path, title, author, wm, log=print):
         f.write(text_out)
 
 
-def _write_html(chapters_data, output_path, title, author, wm, log=print):
+def _write_html(chapters_data, output_path, title, author, log=print):
     """Write merged content as a single HTML file."""
     content_list = _chapters_to_content_list(chapters_data)
 
@@ -1161,8 +1021,6 @@ def _write_html(chapters_data, output_path, title, author, wm, log=print):
 </body>
 </html>"""
 
-    html_out = _embed_watermark_html(html_out, wm)
-
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
@@ -1171,7 +1029,7 @@ def _write_html(chapters_data, output_path, title, author, wm, log=print):
         f.write(html_out)
 
 
-def _write_pdf(chapters_data, output_path, title, author, wm, log=print):
+def _write_pdf(chapters_data, output_path, title, author, log=print):
     """Write merged content as a PDF."""
     content_list = _chapters_to_content_list(chapters_data)
 
@@ -1180,12 +1038,8 @@ def _write_pdf(chapters_data, output_path, title, author, wm, log=print):
     pdf.set_title(title)
     pdf.set_author(author)
 
-    _embed_watermark_pdf(pdf, wm)
-
     def _clean_for_pdf(s):
-        """Strip zero-width chars and force latin-1 safe text."""
-        for zw in "\u200b\u200c\u200d\ufeff":
-            s = s.replace(zw, "")
+        """Force latin-1 safe text for Helvetica font."""
         try:
             s.encode("latin-1")
         except (UnicodeEncodeError, UnicodeDecodeError):
@@ -1226,7 +1080,7 @@ def _write_pdf(chapters_data, output_path, title, author, wm, log=print):
     pdf.output(output_path)
 
 
-def _write_docx(chapters_data, output_path, title, author, wm, log=print):
+def _write_docx(chapters_data, output_path, title, author, log=print):
     """Write merged content as a DOCX file."""
     content_list = _chapters_to_content_list(chapters_data)
 
@@ -1248,8 +1102,6 @@ def _write_docx(chapters_data, output_path, title, author, wm, log=print):
             if line:
                 doc.add_paragraph(line)
 
-    _embed_watermark_docx(doc, wm)
-
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
@@ -1270,9 +1122,6 @@ def merge_files(files, output_path, title, author, dividers=True,
 
     Returns a dict with stats or raises on fatal errors.
     """
-    # generate watermark for this merge
-    wm = _generate_watermark()
-
     # we always build chapters using the epub structures internally,
     # then convert to the target format at the end
     book = epub.EpubBook()
@@ -1387,15 +1236,15 @@ def merge_files(files, output_path, title, author, dividers=True,
 
     if fmt == "epub":
         _write_epub(all_chapters, spine_items, toc, output_path, title, author,
-                     [], book, wm, log)
+                     [], book, log)
     elif fmt == "txt":
-        _write_txt(all_chapters, output_path, title, author, wm, log)
+        _write_txt(all_chapters, output_path, title, author, log)
     elif fmt == "html":
-        _write_html(all_chapters, output_path, title, author, wm, log)
+        _write_html(all_chapters, output_path, title, author, log)
     elif fmt == "pdf":
-        _write_pdf(all_chapters, output_path, title, author, wm, log)
+        _write_pdf(all_chapters, output_path, title, author, log)
     elif fmt == "docx":
-        _write_docx(all_chapters, output_path, title, author, wm, log)
+        _write_docx(all_chapters, output_path, title, author, log)
     else:
         raise RuntimeError(f"Unknown output format: {fmt}")
 
@@ -1411,8 +1260,6 @@ def merge_files(files, output_path, title, author, dividers=True,
         "words": total_words,
         "size": size_nice,
         "path": os.path.abspath(output_path),
-        "watermark": wm["full_tag"],
-        "watermark_short": wm["short"],
     }
 
 
@@ -1692,7 +1539,6 @@ def launch_gui():
                               f"{stats['chapters']} chapter(s), "
                               f"~{stats['words']:,} words, {stats['size']}", "ok")
                     write_log(f"  Saved → {stats['path']}", "ok")
-                    write_log(f"  Watermark: {stats['watermark']}", "dim")
                     status_var.set("Done!")
                     merge_btn.configure(state="normal")
                 root.after(0, _done)
@@ -1783,7 +1629,6 @@ def run_terminal():
         print(f"  Total words    : ~{stats['words']:,}")
         print(f"  Output size    : {stats['size']}")
         print(f"  Output format  : {fmt.upper()}")
-        print(f"  Watermark      : {stats['watermark']}")
         print("=" * 60)
         print(f"\n✓ Done! Saved to:\n  {stats['path']}\n")
 

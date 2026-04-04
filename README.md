@@ -88,22 +88,6 @@ Anything else in the folder gets skipped automatically — it won't break anythi
 
 ================================================================================
 
-## Watermark / DRM
-
-Every output file gets a hidden fingerprint (watermark) embedded into it. This is invisible during normal reading but can be used to trace where a file came from.
-
-The watermark uses multiple methods depending on the output format:
-- **Zero-width Unicode characters** sprinkled into the text
-- **Hidden HTML comments** and meta tags (EPUB, HTML)
-- **Document metadata** (PDF, DOCX, EPUB)
-- **Whitespace patterns** (TXT)
-
-Each merge gets a unique fingerprint — a UUID combined with a timestamp and hash. The fingerprint is printed in the log after every merge so you know what yours is.
-
-This is not DRM in the "you can't open the file" sense. It's more like a serial number baked into the content. You won't see it, but it's there.
-
-================================================================================
-
 ## Tips
 
 - **Control the merge order** by naming your files with number prefixes: `01_prologue.epub`, `02_chapter1.epub`, `03_chapter2.txt`, etc. Files are merged alphabetically.
@@ -111,7 +95,6 @@ This is not DRM in the "you can't open the file" sense. It's more like a serial 
 - **Images** from EPUB and CBZ files carry over into the merged output.
 - **Table of contents** is auto-generated. Multi-chapter EPUBs get nested entries.
 - The default output is **EPUB 3**, which works with pretty much everything: Calibre, Apple Books, Kobo, Rockbox, Kindle (via Send to Kindle or Calibre conversion), you name it.
-- **DRM-protected files won't work.** The script can't strip DRM and I'm not going to add that. If a file has DRM it'll just get skipped.
 
 ================================================================================
 
@@ -146,7 +129,6 @@ The stuff you merge is almost certainly copyrighted. You may NOT:
 - Sell it, trade it, barter it for goats, or monetize it in any way
 - Post it online anywhere — not even "just for friends," not even on a private Discord
 - Use it for AI training or data mining
-- Strip DRM to feed files into this — that violates the DMCA (17 U.S.C. §1201) and I am NOT catching a federal charge because you wanted free books
 
 ### Absolutely Zero Warranty
 
