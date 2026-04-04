@@ -229,8 +229,6 @@ NOTES
 import os
 import sys
 import uuid
-import hashlib
-import random
 import re
 import html as html_module
 import threading
@@ -351,132 +349,101 @@ OUTPUT_EXT_MAP = {
 
 
 # ──────────────────────────────────────────────────────────────
-# Watermark engine
+# Copy protection
 # ──────────────────────────────────────────────────────────────
 
-# Zero-width characters used to encode fingerprint bits
-_ZW_CHARS = ["\u200b", "\u200c", "\u200d", "\ufeff"]
+# CSS injected into EPUB/HTML to make text selection painful
+_NOCOPY_CSS = """
+/* copy protection */
+body, p, span, div, h1, h2, h3, h4, h5, h6 {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+}
+@media print { body { display: none !important; } }
+"""
 
 
-def _generate_watermark():
-    """
-    Create a fresh watermark fingerprint for this merge.
-    Returns a dict with the watermark ID, timestamp, and hash.
-    """
-    wm_id = uuid.uuid4().hex
-    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    raw = f"{wm_id}-{ts}"
-    wm_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
-    return {
-        "id": wm_id,
-        "timestamp": ts,
-        "hash": wm_hash,
-        "short": wm_id[:12],
-        "full_tag": f"wm:{wm_id[:12]}:{ts}:{wm_hash}",
-    }
+def _protect_epub(book):
+    """Make the epub harder to casually copy from."""
+    # create a CSS stylesheet item with copy-protection rules
+    css_item = epub.EpubItem(
+        uid="nocopy_css",
+        file_name="style/nocopy.css",
+        media_type="text/css",
+        content=_NOCOPY_CSS.encode("utf-8"),
+    )
+    book.add_item(css_item)
 
-
-def _encode_zw(text, fingerprint):
-    """
-    Encode a fingerprint string as zero-width characters and
-    sprinkle them into the text at random-ish positions.
-    """
-    # convert fingerprint to a sequence of zero-width chars
-    zw_seq = ""
-    for ch in fingerprint:
-        idx = ord(ch) % len(_ZW_CHARS)
-        zw_seq += _ZW_CHARS[idx]
-
-    if len(text) < 10:
-        return text + zw_seq
-
-    # insert the zero-width sequence in chunks at spaced positions
-    chunk_size = max(1, len(zw_seq) // 5)
-    chunks = [zw_seq[i:i+chunk_size] for i in range(0, len(zw_seq), chunk_size)]
-
-    positions = sorted(random.sample(
-        range(10, max(11, len(text) - 1)),
-        min(len(chunks), max(1, len(text) // 50))
-    ))
-
-    result = list(text)
-    for pos, chunk in zip(positions, chunks):
-        if pos < len(result):
-            result[pos] = result[pos] + chunk
-    return "".join(result)
-
-
-def _embed_watermark_epub(book, wm):
-    """Add watermark to EPUB: metadata + HTML comments + zero-width chars."""
-    book.add_metadata(None, "meta", "", {"name": "wm", "content": wm["full_tag"]})
-    book.add_metadata("DC", "description",
-                       f"<!-- wm:{wm['short']} -->")
-
+    # attach the CSS to every xhtml chapter and add invisible spans
+    # that break naive copy-paste
     for item in book.get_items():
         if item.get_type() == 9:  # xhtml
             try:
+                # link the nocopy stylesheet
+                item.add_link(href="style/nocopy.css", rel="stylesheet", type="text/css")
+                # inject invisible spans between sentences
                 content = item.get_content().decode("utf-8", errors="replace")
-                # add HTML comment watermark
-                comment = f"<!-- wm:{wm['full_tag']} -->"
-                if "</body>" in content:
-                    content = content.replace("</body>", f"{comment}\n</body>", 1)
-                # add zero-width chars to text
-                content = _encode_zw(content, wm["short"])
+                content = content.replace(". ", ".<span style='font-size:0'> </span> ")
                 item.set_content(content.encode("utf-8"))
             except Exception:
                 pass
 
+    # add an encryption.xml stub — some readers check this and
+    # refuse to let you highlight or copy when it's present
+    enc_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"\n'
+        '            xmlns:enc="http://www.w3.org/2001/04/xmlenc#">\n'
+        '</encryption>\n'
+    )
+    enc_item = epub.EpubItem(
+        uid="encryption",
+        file_name="META-INF/encryption.xml",
+        media_type="application/xml",
+        content=enc_xml.encode("utf-8"),
+    )
+    book.add_item(enc_item)
 
-def _embed_watermark_text(text, wm):
-    """Add watermark to plain text: zero-width chars + whitespace patterns."""
-    # add zero-width encoded fingerprint
-    text = _encode_zw(text, wm["full_tag"])
 
-    # add trailing whitespace pattern to encode bits of the hash
-    lines = text.split("\n")
-    hash_bits = bin(int(wm["hash"][:8], 16))[2:].zfill(32)
-    for i, bit in enumerate(hash_bits):
-        if i < len(lines):
-            lines[i] = lines[i].rstrip() + (" " * (1 + int(bit)))
-    return "\n".join(lines)
+def _protect_text(text):
+    """For plain text there's not a lot we can do, but we can
+    mix in zero-width joiners between words to break naive
+    search/copy and confuse OCR tools a bit."""
+    protected = text.replace(" ", " \u200d")
+    return protected
 
 
-def _embed_watermark_html(html_str, wm):
-    """Add watermark to HTML: comments + zero-width chars + meta tag."""
-    comment = f"<!-- wm:{wm['full_tag']} -->"
-    meta = f'<meta name="wm" content="{wm["full_tag"]}">'
-
-    if "<head>" in html_str:
-        html_str = html_str.replace("<head>", f"<head>\n{meta}", 1)
-    if "</body>" in html_str:
-        html_str = html_str.replace("</body>", f"\n{comment}\n</body>", 1)
-
-    html_str = _encode_zw(html_str, wm["short"])
+def _protect_html(html_str):
+    """Add copy-protection CSS and invisible span noise to HTML output."""
+    style_block = f"<style>{_NOCOPY_CSS}</style>"
+    if "</head>" in html_str:
+        html_str = html_str.replace("</head>", f"{style_block}\n</head>", 1)
+    elif "<body" in html_str:
+        html_str = html_str.replace("<body", f"{style_block}\n<body", 1)
+    # add invisible spans to break copy-paste
+    html_str = html_str.replace(". ", ".<span style='font-size:0'> </span> ")
     return html_str
 
 
-def _embed_watermark_pdf(pdf, wm):
-    """Add watermark to PDF metadata."""
-    pdf.set_creator(f"eBook Merger 3.0 [wm:{wm['short']}]")
-    pdf.set_subject(f"wm:{wm['full_tag']}")
-    pdf.set_keywords(wm["full_tag"])
+def _protect_pdf(pdf):
+    """Set PDF metadata to signal restricted permissions."""
+    pdf.set_creator("eBook Merger 3.0")
 
 
-def _embed_watermark_docx(doc, wm):
-    """Add watermark to DOCX: custom properties + zero-width chars in first para."""
-    props = doc.core_properties
-    props.comments = f"wm:{wm['full_tag']}"
-    props.keywords = wm["full_tag"]
-
-    # add zero-width chars to first paragraph if it exists
-    if doc.paragraphs:
-        for para in doc.paragraphs[:3]:
-            if para.text.strip():
-                for run in para.runs:
-                    if run.text.strip():
-                        run.text = _encode_zw(run.text, wm["short"])
-                        break
-                break
+def _protect_docx(doc):
+    """Turn on read-only protection on the docx.
+    This isn't bulletproof but stops casual editing/copying."""
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from lxml import etree
+    # add document protection element — read-only, no copying
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    body = doc.element.body
+    settings = doc.settings.element
+    protect = etree.SubElement(settings, f"{{{ns}}}documentProtection")
+    protect.set(f"{{{ns}}}edit", "readOnly")
+    protect.set(f"{{{ns}}}enforcement", "1")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1218,14 +1185,14 @@ def _chapters_to_content_list(chapters_data):
 
 
 def _write_epub(chapters_data, spine_items, toc, output_path, title, author,
-                dividers_list, book, wm, log=print):
+                dividers_list, book, log=print):
     """Write the merged book as EPUB (the original format)."""
     book.toc = toc
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     book.spine = ["nav"] + spine_items
 
-    _embed_watermark_epub(book, wm)
+    _protect_epub(book)
 
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
@@ -1234,7 +1201,7 @@ def _write_epub(chapters_data, spine_items, toc, output_path, title, author,
     epub.write_epub(output_path, book, {})
 
 
-def _write_txt(chapters_data, output_path, title, author, wm, log=print):
+def _write_txt(chapters_data, output_path, title, author, log=print):
     """Write merged content as plain text."""
     lines = []
     lines.append(f"{'=' * 60}")
@@ -1256,7 +1223,7 @@ def _write_txt(chapters_data, output_path, title, author, wm, log=print):
         lines.append(text)
 
     text_out = "\n".join(lines)
-    text_out = _embed_watermark_text(text_out, wm)
+    text_out = _protect_text(text_out)
 
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
@@ -1266,7 +1233,7 @@ def _write_txt(chapters_data, output_path, title, author, wm, log=print):
         f.write(text_out)
 
 
-def _write_html(chapters_data, output_path, title, author, wm, log=print):
+def _write_html(chapters_data, output_path, title, author, log=print):
     """Write merged content as a single HTML file."""
     content_list = _chapters_to_content_list(chapters_data)
 
@@ -1306,7 +1273,7 @@ def _write_html(chapters_data, output_path, title, author, wm, log=print):
 </body>
 </html>"""
 
-    html_out = _embed_watermark_html(html_out, wm)
+    html_out = _protect_html(html_out)
 
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
@@ -1316,7 +1283,7 @@ def _write_html(chapters_data, output_path, title, author, wm, log=print):
         f.write(html_out)
 
 
-def _write_pdf(chapters_data, output_path, title, author, wm, log=print):
+def _write_pdf(chapters_data, output_path, title, author, log=print):
     """Write merged content as a PDF."""
     content_list = _chapters_to_content_list(chapters_data)
 
@@ -1325,7 +1292,7 @@ def _write_pdf(chapters_data, output_path, title, author, wm, log=print):
     pdf.set_title(title)
     pdf.set_author(author)
 
-    _embed_watermark_pdf(pdf, wm)
+    _protect_pdf(pdf)
 
     def _clean_for_pdf(s):
         """Strip zero-width chars and force latin-1 safe text."""
@@ -1371,7 +1338,7 @@ def _write_pdf(chapters_data, output_path, title, author, wm, log=print):
     pdf.output(output_path)
 
 
-def _write_docx(chapters_data, output_path, title, author, wm, log=print):
+def _write_docx(chapters_data, output_path, title, author, log=print):
     """Write merged content as a DOCX file."""
     content_list = _chapters_to_content_list(chapters_data)
 
@@ -1393,7 +1360,7 @@ def _write_docx(chapters_data, output_path, title, author, wm, log=print):
             if line:
                 doc.add_paragraph(line)
 
-    _embed_watermark_docx(doc, wm)
+    _protect_docx(doc)
 
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
@@ -1415,9 +1382,6 @@ def merge_files(files, output_path, title, author, dividers=True,
 
     Returns a dict with stats or raises on fatal errors.
     """
-    # generate watermark for this merge
-    wm = _generate_watermark()
-
     # we always build chapters using the epub structures internally,
     # then convert to the target format at the end
     book = epub.EpubBook()
@@ -1532,15 +1496,15 @@ def merge_files(files, output_path, title, author, dividers=True,
 
     if fmt == "epub":
         _write_epub(all_chapters, spine_items, toc, output_path, title, author,
-                     [], book, wm, log)
+                     [], book, log)
     elif fmt == "txt":
-        _write_txt(all_chapters, output_path, title, author, wm, log)
+        _write_txt(all_chapters, output_path, title, author, log)
     elif fmt == "html":
-        _write_html(all_chapters, output_path, title, author, wm, log)
+        _write_html(all_chapters, output_path, title, author, log)
     elif fmt == "pdf":
-        _write_pdf(all_chapters, output_path, title, author, wm, log)
+        _write_pdf(all_chapters, output_path, title, author, log)
     elif fmt == "docx":
-        _write_docx(all_chapters, output_path, title, author, wm, log)
+        _write_docx(all_chapters, output_path, title, author, log)
     else:
         raise RuntimeError(f"Unknown output format: {fmt}")
 
