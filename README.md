@@ -12,12 +12,6 @@ Supports **EPUB**, **TXT**, **HTML**, **PDF**, **DOCX**, **RTF**, **Markdown**, 
 
 ![Dark Theme](screenshots/dark_theme.png)
 
-Five built-in themes — switches instantly and remembers your choice.
-
-| Light | Midnight | Forest | Sunset |
-|---|---|---|---|
-| <img src="screenshots/light_theme.png" width="180"> | <img src="screenshots/midnight_theme.png" width="180"> | <img src="screenshots/forest_theme.png" width="180"> | <img src="screenshots/sunset_theme.png" width="180"> |
-
 ================================================================================
 
 ## Requirements
@@ -251,3 +245,13 @@ I built this so reading is more convenient, not so people can rip off writers. I
 
 Released for personal use. See the disclaimer above (seriously, read it — it's actually pretty funny).
 I don't claim ownership over anything this script processes.
+
+================================================================================
+
+## Other Themes
+
+Five built-in themes — switches instantly and remembers your choice.
+
+| Light | Midnight | Forest | Sunset |
+|---|---|---|---|
+| <img src="screenshots/light_theme.png" width="180"> | <img src="screenshots/midnight_theme.png" width="180"> | <img src="screenshots/forest_theme.png" width="180"> | <img src="screenshots/sunset_theme.png" width="180"> |
